@@ -1,0 +1,191 @@
+---
+name: "EstablishmentReadSuite"
+description: "establishment:read — permission map + scope (establishment / platform)"
+principals:
+  owner_e1:
+    id: "user_owner_e1"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        establishment:read: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  owner_e2:
+    id: "user_owner_e2"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        establishment:read: "establishment"
+      establishmentId: "E2"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  staff_e1:
+    id: "user_staff_e1"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        establishment:read: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  platform_admin:
+    id: "user_admin"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        establishment:read: "platform"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: true
+  player_a:
+    id: "user_a"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        booking:read: "own"
+      isPlatformAdmin: false
+  wrong_scope:
+    id: "user_wrong_scope"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        establishment:read: "own"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  no_permissions:
+    id: "user_no_permissions"
+    roles: ["authenticated"]
+    attr:
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  staff_e1_no_tenant:
+    id: "user_staff_no_tenant"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        establishment:read: "establishment"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  anonymous:
+    id: "anonymous"
+    roles: ["anonymous"]
+    attr: {}
+resources:
+  establishment_e1:
+    id: "E1"
+    kind: "establishment"
+    attr:
+      establishmentId: "E1"
+  establishment_e2:
+    id: "E2"
+    kind: "establishment"
+    attr:
+      establishmentId: "E2"
+  establishment_no_tenant:
+    id: "E0"
+    kind: "establishment"
+    attr: {}
+tests:
+  - name: "owner E1 can read establishment E1"
+    input:
+      principals: ["owner_e1"]
+      resources: ["establishment_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "owner_e1"
+        resource: "establishment_e1"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "owner E1 cannot read establishment E2"
+    input:
+      principals: ["owner_e1"]
+      resources: ["establishment_e2"]
+      actions: ["read"]
+    expected:
+      - principal: "owner_e1"
+        resource: "establishment_e2"
+        actions:
+          read: EFFECT_DENY
+  - name: "owner E2 cannot read establishment E1"
+    input:
+      principals: ["owner_e2"]
+      resources: ["establishment_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "owner_e2"
+        resource: "establishment_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "staff E1 can read establishment E1"
+    input:
+      principals: ["staff_e1"]
+      resources: ["establishment_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "staff_e1"
+        resource: "establishment_e1"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "platform admin can read any establishment"
+    input:
+      principals: ["platform_admin"]
+      resources: ["establishment_e2"]
+      actions: ["read"]
+    expected:
+      - principal: "platform_admin"
+        resource: "establishment_e2"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "player without establishment permission is denied"
+    input:
+      principals: ["player_a"]
+      resources: ["establishment_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "player_a"
+        resource: "establishment_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "own scope is not valid for establishment reads"
+    input:
+      principals: ["wrong_scope"]
+      resources: ["establishment_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "wrong_scope"
+        resource: "establishment_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "authenticated principal without the permission is denied"
+    input:
+      principals: ["no_permissions"]
+      resources: ["establishment_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "no_permissions"
+        resource: "establishment_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "establishment scope without tenant attributes is denied"
+    input:
+      principals: ["staff_e1_no_tenant"]
+      resources: ["establishment_no_tenant"]
+      actions: ["read"]
+    expected:
+      - principal: "staff_e1_no_tenant"
+        resource: "establishment_no_tenant"
+        actions:
+          read: EFFECT_DENY
+  - name: "anonymous is denied"
+    input:
+      principals: ["anonymous"]
+      resources: ["establishment_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "anonymous"
+        resource: "establishment_e1"
+        actions:
+          read: EFFECT_DENY

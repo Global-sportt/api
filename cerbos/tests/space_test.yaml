@@ -1,0 +1,191 @@
+---
+name: "SpaceReadSuite"
+description: "space:read — permission map + scope (establishment / platform)"
+principals:
+  owner_e1:
+    id: "user_owner_e1"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        space:read: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  owner_e2:
+    id: "user_owner_e2"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        space:read: "establishment"
+      establishmentId: "E2"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  staff_e1:
+    id: "user_staff_e1"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        space:read: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  platform_admin:
+    id: "user_admin"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        space:read: "platform"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: true
+  player_a:
+    id: "user_a"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        booking:read: "own"
+      isPlatformAdmin: false
+  wrong_scope:
+    id: "user_wrong_scope"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        space:read: "own"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  no_permissions:
+    id: "user_no_permissions"
+    roles: ["authenticated"]
+    attr:
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  staff_e1_no_tenant:
+    id: "user_staff_no_tenant"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        space:read: "establishment"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  anonymous:
+    id: "anonymous"
+    roles: ["anonymous"]
+    attr: {}
+resources:
+  space_e1:
+    id: "S1"
+    kind: "space"
+    attr:
+      establishmentId: "E1"
+  space_e2:
+    id: "S2"
+    kind: "space"
+    attr:
+      establishmentId: "E2"
+  space_no_tenant:
+    id: "S0"
+    kind: "space"
+    attr: {}
+tests:
+  - name: "owner E1 can read space S1"
+    input:
+      principals: ["owner_e1"]
+      resources: ["space_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "owner_e1"
+        resource: "space_e1"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "staff E1 can read space S1"
+    input:
+      principals: ["staff_e1"]
+      resources: ["space_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "staff_e1"
+        resource: "space_e1"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "owner E1 cannot read space S2"
+    input:
+      principals: ["owner_e1"]
+      resources: ["space_e2"]
+      actions: ["read"]
+    expected:
+      - principal: "owner_e1"
+        resource: "space_e2"
+        actions:
+          read: EFFECT_DENY
+  - name: "owner E2 cannot read space S1"
+    input:
+      principals: ["owner_e2"]
+      resources: ["space_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "owner_e2"
+        resource: "space_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "platform admin can read any space"
+    input:
+      principals: ["platform_admin"]
+      resources: ["space_e2"]
+      actions: ["read"]
+    expected:
+      - principal: "platform_admin"
+        resource: "space_e2"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "player without space permission is denied"
+    input:
+      principals: ["player_a"]
+      resources: ["space_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "player_a"
+        resource: "space_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "own scope is not valid for space reads"
+    input:
+      principals: ["wrong_scope"]
+      resources: ["space_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "wrong_scope"
+        resource: "space_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "authenticated principal without the permission is denied"
+    input:
+      principals: ["no_permissions"]
+      resources: ["space_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "no_permissions"
+        resource: "space_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "establishment scope without tenant attributes is denied"
+    input:
+      principals: ["staff_e1_no_tenant"]
+      resources: ["space_no_tenant"]
+      actions: ["read"]
+    expected:
+      - principal: "staff_e1_no_tenant"
+        resource: "space_no_tenant"
+        actions:
+          read: EFFECT_DENY
+  - name: "anonymous is denied"
+    input:
+      principals: ["anonymous"]
+      resources: ["space_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "anonymous"
+        resource: "space_e1"
+        actions:
+          read: EFFECT_DENY
