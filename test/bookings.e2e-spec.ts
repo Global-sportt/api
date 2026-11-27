@@ -665,6 +665,14 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
 
     const authorization = app.get<AuthorizationService>(AUTHORIZATION_SERVICE);
     const canSpy = jest.spyOn(authorization, 'can');
+    // A2b added `decide()` so the guard can correlate cerbosCallId; when the
+    // real service exposes it, the guard uses it instead of `can`.
+    const decideSpy = jest.spyOn(
+      authorization as unknown as {
+        decide: (...args: unknown[]) => Promise<unknown>;
+      },
+      'decide',
+    );
 
     try {
       const readForeign = await bearer(
@@ -732,8 +740,12 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
       );
 
       // The guard still evaluated its own (synthetic) resource before the
-      // service re-evaluated the real one: both layers ran.
-      const guardCalls = canSpy.mock.calls.filter(([, , , resource]) => {
+      // service re-evaluated the real one: both layers ran. The guard uses
+      // decide() when available; can() remains the service-level call.
+      const guardCalls = decideSpy.mock.calls.filter((args) => {
+        const resource = args[3] as
+          | { id?: string; playerId?: string }
+          | undefined;
         return (
           resource?.id === bookingId &&
           resource?.playerId === playerA.userId
@@ -742,6 +754,7 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
       expect(guardCalls.length).toBeGreaterThanOrEqual(2);
     } finally {
       canSpy.mockRestore();
+      decideSpy.mockRestore();
     }
   });
 
