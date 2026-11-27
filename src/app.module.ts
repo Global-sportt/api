@@ -23,6 +23,7 @@ import { HealthModule } from './modules/health/health.module';
 import { AuthzModule } from './common/authz/authz.module';
 import { EstablishmentsModule } from './modules/establishments/establishments.module';
 import { SpacesModule } from './modules/spaces/spaces.module';
+import { BookingsModule } from './modules/bookings/bookings.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { SpacesModule } from './modules/spaces/spaces.module';
     AuthzModule,
     EstablishmentsModule,
     SpacesModule,
+    BookingsModule,
   ],
   providers: [
     {
