@@ -25,6 +25,8 @@ interface OpeningWindow {
  * Rules:
  * - No operating hours, a closed exception, or an invalid window => no slots.
  * - An exception with alternate hours replaces that day's regular hours.
+ *   Regular days may have several non-overlapping windows; every window is
+ *   walked independently.
  * - A slot must fit fully before the closing minute; slots never end after
  *   close. The buffer is added between consecutive slots, not after the last.
  * - Price rules apply only when the complete slot lies inside the rule range.
@@ -59,78 +61,92 @@ export function generateSlots(
 
   if (exception?.isClosed) return [];
 
-  const window = resolveWindow(
-    input.operatingHours,
-    dayOfWeek,
-    exception,
-  );
-  if (!window) return [];
+  const windows = resolveWindows(input.operatingHours, dayOfWeek, exception);
+  if (windows.length === 0) return [];
 
   const slots: GeneratedSlot[] = [];
   const step = input.space.slotMinutes + input.space.bufferMinutes;
+  const seenStarts = new Set<string>();
 
-  for (
-    let startsAtMinutes = window.opensAtMinutes;
-    startsAtMinutes + input.space.slotMinutes <= window.closesAtMinutes;
-    startsAtMinutes += step
-  ) {
-    const endsAtMinutes = startsAtMinutes + input.space.slotMinutes;
-    const start = wallClockToUtc(
-      input.date,
-      startsAtMinutes,
-      input.timezone,
-    );
+  for (const window of windows) {
+    for (
+      let startsAtMinutes = window.opensAtMinutes;
+      startsAtMinutes + input.space.slotMinutes <= window.closesAtMinutes;
+      startsAtMinutes += step
+    ) {
+      const endsAtMinutes = startsAtMinutes + input.space.slotMinutes;
+      const start = wallClockToUtc(
+        input.date,
+        startsAtMinutes,
+        input.timezone,
+      );
 
-    // A wall-clock start inside a DST gap does not exist. Skipping it keeps
-    // the following (real) slot from being duplicated.
-    if (!start.exists) continue;
+      // A wall-clock start inside a DST gap does not exist. Skipping it keeps
+      // the following (real) slot from being duplicated.
+      if (!start.exists) continue;
 
-    const end = wallClockToUtc(input.date, endsAtMinutes, input.timezone);
-    if (end.instant.getTime() <= start.instant.getTime()) continue;
+      const end = wallClockToUtc(input.date, endsAtMinutes, input.timezone);
+      if (end.instant.getTime() <= start.instant.getTime()) continue;
 
-    const price = selectPrice(
-      input.priceRules,
-      dayOfWeek,
-      startsAtMinutes,
-      endsAtMinutes,
-      input.currency,
-    );
-    const slot: GeneratedSlot = {
-      startsAt: start.instant.toISOString(),
-      endsAt: end.instant.toISOString(),
-      priceMinor: price.amountMinor.toString(),
-      currency: price.currency,
-      available: true,
-    };
+      const startsAt = start.instant.toISOString();
+      if (seenStarts.has(startsAt)) continue;
+      seenStarts.add(startsAt);
 
-    if (options.isAvailable && !options.isAvailable(slot, { spaceId: input.space.id })) {
-      continue;
+      const price = selectPrice(
+        input.priceRules,
+        dayOfWeek,
+        startsAtMinutes,
+        endsAtMinutes,
+        input.currency,
+      );
+      const slot: GeneratedSlot = {
+        startsAt,
+        endsAt: end.instant.toISOString(),
+        priceMinor: price.amountMinor.toString(),
+        currency: price.currency,
+        available: true,
+      };
+
+      if (options.isAvailable && !options.isAvailable(slot, { spaceId: input.space.id })) {
+        continue;
+      }
+
+      slots.push(slot);
     }
-
-    slots.push(slot);
   }
 
-  return slots;
+  // Overlapping windows are rejected at write time; sorting keeps the output
+  // deterministic if legacy data ever contains more than one window per day.
+  return slots.sort((left, right) => left.startsAt.localeCompare(right.startsAt));
 }
 
-function resolveWindow(
+function resolveWindows(
   operatingHours: readonly SlotOperatingHour[],
   dayOfWeek: number,
   exception: SlotGeneratorInput['exception'],
-): OpeningWindow | null {
+): OpeningWindow[] {
   if (
     exception &&
     !exception.isClosed &&
     exception.opensAtMinutes != null &&
     exception.closesAtMinutes != null
   ) {
-    return validWindow(exception.opensAtMinutes, exception.closesAtMinutes);
+    const window = validWindow(exception.opensAtMinutes, exception.closesAtMinutes);
+    return window ? [window] : [];
   }
 
-  const regular = operatingHours.find((hour) => hour.dayOfWeek === dayOfWeek);
-  if (!regular) return null;
+  const windows: OpeningWindow[] = [];
+  for (const hour of operatingHours) {
+    if (hour.dayOfWeek !== dayOfWeek) continue;
+    const window = validWindow(hour.opensAtMinutes, hour.closesAtMinutes);
+    if (window) windows.push(window);
+  }
 
-  return validWindow(regular.opensAtMinutes, regular.closesAtMinutes);
+  return windows.sort(
+    (left, right) =>
+      left.opensAtMinutes - right.opensAtMinutes ||
+      left.closesAtMinutes - right.closesAtMinutes,
+  );
 }
 
 function validWindow(
