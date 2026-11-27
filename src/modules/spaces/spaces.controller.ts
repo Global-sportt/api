@@ -1,12 +1,22 @@
 import {
+  Body,
   Controller,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
+  Patch,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiCreatedResponse,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Authorize } from '../../common/authz/authorize.decorator';
 import { AuthorizationGuard } from '../../common/authz/authorization.guard';
 import { Public } from '../../common/decorators/public.decorator';
@@ -15,6 +25,9 @@ import {
   AvailabilityQueryDto,
   PublicAvailabilityQueryDto,
 } from './dto/availability-query.dto';
+import { CreateSpaceDto } from './dto/create-space.dto';
+import { ListSpacesQueryDto } from './dto/list-spaces-query.dto';
+import { UpdateSpaceDto } from './dto/update-space.dto';
 import {
   PublicAvailabilityResponse,
   SpaceListItem,
@@ -63,8 +76,31 @@ export class SpacesController {
   @ApiResponse({ status: 404, description: 'Establecimiento no encontrado.' })
   list(
     @Param('id', new ParseUUIDPipe()) establishmentId: string,
+    @Query() query: ListSpacesQueryDto,
   ): Promise<SpaceListItem[]> {
-    return this.spaces.listSpaces(establishmentId);
+    return this.spaces.listSpaces(establishmentId, query);
+  }
+
+  @Post()
+  @Authorize('space', 'create')
+  @HttpCode(201)
+  @ApiOperation({
+    summary: 'Crear una cancha en el establecimiento',
+    description:
+      'El slug se genera desde el nombre si se omite y es único por establecimiento. El deporte es obligatorio.',
+  })
+  @ApiCreatedResponse({ description: 'Cancha creada.' })
+  @ApiResponse({ status: 400, description: 'Datos inválidos.' })
+  @ApiResponse({ status: 403, description: 'Sin permiso space:create.' })
+  @ApiResponse({
+    status: 409,
+    description: 'El slug ya existe en el establecimiento.',
+  })
+  create(
+    @Param('id', new ParseUUIDPipe()) establishmentId: string,
+    @Body() dto: CreateSpaceDto,
+  ): Promise<SpaceListItem> {
+    return this.spaces.createSpace(establishmentId, dto);
   }
 
   @Get(':spaceId/availability')
@@ -83,5 +119,27 @@ export class SpacesController {
     @Query() query: AvailabilityQueryDto,
   ): Promise<TenantAvailabilityResponse> {
     return this.spaces.getAvailability(establishmentId, spaceId, query.date);
+  }
+
+  @Patch(':spaceId')
+  @Authorize('space', 'update')
+  @ApiOperation({
+    summary: 'Actualizar una cancha del establecimiento',
+    description:
+      'Actualización parcial de datos y estado. Cambiar el estado a maintenance o inactive no elimina ni oculta reservas existentes.',
+  })
+  @ApiResponse({ status: 200, description: 'Cancha actualizada.' })
+  @ApiResponse({ status: 400, description: 'Datos inválidos.' })
+  @ApiResponse({ status: 403, description: 'Sin permiso space:update.' })
+  @ApiResponse({
+    status: 404,
+    description: 'Establecimiento o cancha no encontrados.',
+  })
+  update(
+    @Param('id', new ParseUUIDPipe()) establishmentId: string,
+    @Param('spaceId', new ParseUUIDPipe()) spaceId: string,
+    @Body() dto: UpdateSpaceDto,
+  ): Promise<SpaceListItem> {
+    return this.spaces.updateSpace(establishmentId, spaceId, dto);
   }
 }
