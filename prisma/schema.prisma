@@ -37,6 +37,16 @@ enum SpaceStatus {
   maintenance
 }
 
+enum BookingStatus {
+  pending_payment
+  confirmed
+  checked_in
+  completed
+  cancelled
+  expired
+  no_show
+}
+
 enum UserStatus {
   active
   suspended
@@ -83,6 +93,8 @@ model User {
   authEvents         AuthEvent[]
   memberships        Membership[]
   globalGroups       UserGlobalGroup[]
+  bookingsAsPlayer   Booking[]             @relation("BookingPlayer")
+  bookingsCreated    Booking[]             @relation("BookingCreatedBy")
 
   @@index([status])
   @@map("users")
@@ -269,6 +281,7 @@ model Establishment {
   securityGroups SecurityGroup[]
   memberships    Membership[]
   spaces         Space[]
+  bookings       Booking[]
 
   @@map("establishments")
 }
@@ -339,8 +352,12 @@ model Space {
   operatingHours OperatingHour[]
   exceptions     ScheduleException[]
   priceRules     PriceRule[]
+  bookings       Booking[]
 
   @@unique([establishmentId, slug])
+  // Composite key used by bookings FK (space_id, establishment_id): a space
+  // can never be referenced with another establishment's id.
+  @@unique([id, establishmentId])
   @@index([establishmentId, status])
   @@map("spaces")
 }
@@ -387,4 +404,35 @@ model PriceRule {
 
   @@index([spaceId, dayOfWeek])
   @@map("price_rules")
+}
+
+model Booking {
+  id              String        @id @default(uuid()) @db.Uuid
+  publicCode      String        @unique @map("public_code")
+  establishmentId String        @map("establishment_id") @db.Uuid
+  spaceId         String        @map("space_id") @db.Uuid
+  playerId        String        @map("player_id") @db.Uuid
+  createdByUserId String        @map("created_by_user_id") @db.Uuid
+  startsAt        DateTime      @map("starts_at") @db.Timestamptz(6)
+  endsAt          DateTime      @map("ends_at") @db.Timestamptz(6)
+  status          BookingStatus @default(confirmed)
+  totalMinor      BigInt        @map("total_minor")
+  currency        String
+  idempotencyKey  String?       @map("idempotency_key")
+  requestHash     String?       @map("request_hash")
+  expiresAt       DateTime?     @map("expires_at") @db.Timestamptz(6)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  establishment Establishment @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
+  space         Space         @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  player        User          @relation("BookingPlayer", fields: [playerId], references: [id], onDelete: Cascade)
+  createdBy     User          @relation("BookingCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  @@unique([createdByUserId, idempotencyKey])
+  @@index([spaceId, startsAt])
+  @@index([playerId, startsAt])
+  @@index([establishmentId, startsAt])
+  @@index([status, expiresAt])
+  @@map("bookings")
 }
