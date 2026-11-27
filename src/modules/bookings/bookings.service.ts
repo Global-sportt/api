@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   BookingStatus,
+  EstablishmentStatus,
   Prisma,
   SpaceStatus,
   UserStatus,
@@ -71,6 +72,12 @@ type PlanResourcesResponseShape = Parameters<
 >[0]['queryPlan'];
 
 const MAX_IDEMPOTENCY_INSERT_ATTEMPTS = 3;
+
+/**
+ * A booking may start a few seconds in the past only to absorb clock skew
+ * between the client and the API. Anything older is rejected.
+ */
+export const BOOKING_START_TOLERANCE_MS = 30_000;
 
 export interface BookingResponse {
   id: string;
@@ -167,6 +174,10 @@ export class BookingsService {
       if (existing) return this.replayOrThrow(existing, requestHash);
     }
 
+    // F-01: a fresh booking must start in the future. Replays above keep
+    // their idempotent 200 even after the slot has started.
+    assertStartsAtNotInPast(new Date(times.startsAtIso));
+
     const resolved = await this.resolveBookableSlot({
       spaceId: dto.spaceId,
       startsAtIso: times.startsAtIso,
@@ -223,6 +234,9 @@ export class BookingsService {
       if (existing) return this.replayOrThrow(existing, requestHash);
     }
 
+    // F-01: applies to tenant creation too; only real replays skip it.
+    assertStartsAtNotInPast(new Date(times.startsAtIso));
+
     await this.assertActivePlayer(dto.playerId);
 
     const resolved = await this.resolveBookableSlot({
@@ -276,28 +290,39 @@ export class BookingsService {
     return rows.map(toBookingResponse);
   }
 
-  /** Own detail. A booking from another player is indistinguishable from 404. */
+  /**
+   * Own detail. The booking is loaded by id and actually evaluated by Cerbos
+   * with the real resource attributes (F-06); a foreign booking is still 404
+   * because `/me` keeps the `playerId = actor` invariant even for
+   * platform-admin.
+   */
   async getMine(actorId: string, bookingId: string): Promise<BookingResponse> {
-    const row = await this.prisma.booking.findFirst({
-      where: { id: bookingId, playerId: actorId },
+    const row = await this.prisma.booking.findUnique({
+      where: { id: bookingId },
       select: bookingSelect,
     });
 
     if (!row) throw bookingNotFound();
+    await this.assertCanAccessOwnBooking(actorId, row, 'read');
+
     return toBookingResponse(row);
   }
 
-  /** Own cancellation: ownership, status and the starts-at window are enforced. */
+  /**
+   * Own cancellation: real Cerbos check plus ownership, status and the
+   * starts-at window. Any deny is indistinguishable from a missing booking.
+   */
   async cancelMine(
     actorId: string,
     bookingId: string,
   ): Promise<BookingResponse> {
-    const row = await this.prisma.booking.findFirst({
-      where: { id: bookingId, playerId: actorId },
+    const row = await this.prisma.booking.findUnique({
+      where: { id: bookingId },
       select: bookingSelect,
     });
 
     if (!row) throw bookingNotFound();
+    await this.assertCanAccessOwnBooking(actorId, row, 'cancel');
     assertCancellableByPlayer(row);
 
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -478,6 +503,36 @@ export class BookingsService {
   }
 
   /**
+   * F-06: `/me` detail/cancel must let the PDP evaluate the real booking, not
+   * the synthetic `playerId` injected by the guard. The explicit ownership
+   * check keeps `/me` scoped to the caller even for platform-admin.
+   */
+  private async assertCanAccessOwnBooking(
+    actorId: string,
+    row: BookingRow,
+    action: 'read' | 'cancel',
+  ): Promise<void> {
+    const principal = await this.permissions.resolve(actorId);
+    const allowed = await this.authorization.can(
+      principal,
+      'booking',
+      action,
+      {
+        id: row.id,
+        playerId: row.playerId,
+        establishmentId: row.establishmentId,
+        status: row.status,
+        startsAt: row.startsAt.toISOString(),
+        endsAt: row.endsAt.toISOString(),
+      },
+    );
+
+    if (!allowed || row.playerId !== actorId) {
+      throw bookingNotFound();
+    }
+  }
+
+  /**
    * Generates T5 slots for the local date of `startsAt` and requires the exact
    * generated slot. Price and currency come only from that slot.
    */
@@ -501,7 +556,11 @@ export class BookingsService {
         bufferMinutes: true,
         status: true,
         establishment: {
-          select: { timezone: true, currency: true },
+          select: {
+            timezone: true,
+            currency: true,
+            status: true,
+          },
         },
         operatingHours: {
           select: {
@@ -526,6 +585,13 @@ export class BookingsService {
 
     if (!space || space.status !== SpaceStatus.active) {
       throw spaceNotFound();
+    }
+
+    // F-02: a pending/suspended establishment must not receive new bookings
+    // through either the own or the tenant route. The response is the same
+    // 404 as a missing space so the tenant state is not disclosed.
+    if (space.establishment.status !== EstablishmentStatus.active) {
+      throw establishmentNotFound();
     }
 
     const timezone = space.establishment.timezone;
@@ -893,6 +959,24 @@ function invalidInstant(field: string): AppError {
   );
 }
 
+/**
+ * F-01: rejects a fresh booking whose slot already started, allowing only the
+ * documented 30-second clock tolerance.
+ */
+export function assertStartsAtNotInPast(
+  startsAt: Date,
+  now: Date = new Date(),
+): void {
+  if (startsAt.getTime() <= now.getTime() - BOOKING_START_TOLERANCE_MS) {
+    throw new AppError(
+      400,
+      'VALIDATION_ERROR',
+      'startsAt debe ser una franja futura.',
+      [{ field: 'startsAt', constraints: ['isFuture'] }],
+    );
+  }
+}
+
 function assertCancellableByPlayer(row: BookingRow): void {
   if (
     row.status === BookingStatus.pending_payment &&
@@ -1006,6 +1090,14 @@ function spaceNotFound(): AppError {
     404,
     'SPACE_NOT_FOUND',
     'La cancha no existe o no está activa.',
+  );
+}
+
+function establishmentNotFound(): AppError {
+  return new AppError(
+    404,
+    'ESTABLISHMENT_NOT_FOUND',
+    'El establecimiento no existe o no está activo.',
   );
 }
 
