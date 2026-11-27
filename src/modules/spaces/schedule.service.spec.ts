@@ -68,6 +68,69 @@ describe('Validación de la grilla semanal', () => {
     ).toEqual([]);
   });
 
+  it('acepta ventanas que solo se tocan', () => {
+    expect(
+      findOperatingHourConflicts([
+        hour(1, 9 * 60, 12 * 60),
+        hour(1, 12 * 60, 18 * 60),
+      ]),
+    ).toEqual([]);
+    expect(() =>
+      assertValidOperatingHours([
+        hour(1, 9 * 60, 12 * 60),
+        hour(1, 12 * 60, 18 * 60),
+      ]),
+    ).not.toThrow();
+  });
+
+  it('reporta todos los cruces de ventanas anidadas sin duplicar mensajes', () => {
+    const hours = [
+      hour(1, 9 * 60, 18 * 60),
+      hour(1, 10 * 60, 11 * 60),
+      hour(1, 12 * 60, 13 * 60),
+    ];
+
+    const conflicts = findOperatingHourConflicts(hours);
+
+    expect(conflicts).toHaveLength(2);
+    expect(conflicts.every((conflict) => conflict.constraints[0] === 'overlap')).toBe(
+      true,
+    );
+    const messages = conflicts.map((conflict) => conflict.message);
+    expect(messages.some((message) => message.includes('09:00-18:00'))).toBe(true);
+    expect(
+      messages.some(
+        (message) =>
+          message.includes('09:00-18:00') && message.includes('10:00-11:00'),
+      ),
+    ).toBe(true);
+    expect(
+      messages.some(
+        (message) =>
+          message.includes('09:00-18:00') && message.includes('12:00-13:00'),
+      ),
+    ).toBe(true);
+    expect(new Set(messages).size).toBe(2);
+
+    const error = expectAppError(
+      () => assertValidOperatingHours(hours),
+      400,
+      'VALIDATION_ERROR',
+    );
+    expect(error.details).toHaveLength(2);
+  });
+
+  it('no repite el mismo mensaje cuando hay ventanas idénticas', () => {
+    const conflicts = findOperatingHourConflicts([
+      hour(2, 9 * 60, 12 * 60),
+      hour(2, 9 * 60, 12 * 60),
+      hour(2, 9 * 60, 12 * 60),
+    ]);
+
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].constraints).toEqual(['duplicate']);
+  });
+
   it('rechaza cruces del mismo día e indica el día y las franjas', () => {
     const error = expectAppError(
       () =>

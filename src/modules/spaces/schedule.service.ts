@@ -79,11 +79,19 @@ export function findOperatingHourConflicts(
   hours: readonly OperatingHourInput[],
 ): OperatingHourConflict[] {
   const conflicts: OperatingHourConflict[] = [];
+  // A pair is evaluated once (i < j) and identical messages are collapsed, so
+  // three equal windows do not produce three copies of the same conflict.
+  const seenMessages = new Set<string>();
+  const pushConflict = (conflict: OperatingHourConflict): void => {
+    if (seenMessages.has(conflict.message)) return;
+    seenMessages.add(conflict.message);
+    conflicts.push(conflict);
+  };
 
   for (let index = 0; index < hours.length; index += 1) {
     const hour = hours[index];
     if (hour.closesAtMinutes <= hour.opensAtMinutes) {
-      conflicts.push({
+      pushConflict({
         field: `hours[${index}]`,
         dayOfWeek: hour.dayOfWeek,
         constraints: ['range'],
@@ -95,41 +103,49 @@ export function findOperatingHourConflicts(
 
   for (let dayOfWeek = 0; dayOfWeek < 7; dayOfWeek += 1) {
     const dayHours = hours
+      .map((hour, index) => ({ hour, index }))
       .filter(
-        (hour) =>
+        ({ hour }) =>
           hour.dayOfWeek === dayOfWeek &&
           hour.closesAtMinutes > hour.opensAtMinutes,
       )
-      .slice()
       .sort(
         (left, right) =>
-          left.opensAtMinutes - right.opensAtMinutes ||
-          left.closesAtMinutes - right.closesAtMinutes,
+          left.hour.opensAtMinutes - right.hour.opensAtMinutes ||
+          left.hour.closesAtMinutes - right.hour.closesAtMinutes,
       );
 
-    for (let index = 1; index < dayHours.length; index += 1) {
-      const previous = dayHours[index - 1];
-      const current = dayHours[index];
+    // Every pair of the same day is checked, not only adjacent windows: a wide
+    // window can overlap two smaller ones that do not touch each other.
+    for (let leftIndex = 0; leftIndex < dayHours.length; leftIndex += 1) {
+      for (
+        let rightIndex = leftIndex + 1;
+        rightIndex < dayHours.length;
+        rightIndex += 1
+      ) {
+        const left = dayHours[leftIndex];
+        const right = dayHours[rightIndex];
 
-      if (current.opensAtMinutes === previous.opensAtMinutes) {
-        conflicts.push({
-          field: `hours[${hours.indexOf(current)}]`,
-          dayOfWeek,
-          constraints: ['duplicate'],
-          message: `El ${dayName(dayOfWeek)}: la franja ${formatRange(current)} está duplicada (${formatRange(previous)}).`,
-          ranges: [toRange(previous), toRange(current)],
-        });
-        continue;
-      }
+        if (right.hour.opensAtMinutes === left.hour.opensAtMinutes) {
+          pushConflict({
+            field: `hours[${right.index}]`,
+            dayOfWeek,
+            constraints: ['duplicate'],
+            message: `El ${dayName(dayOfWeek)}: la franja ${formatRange(right.hour)} está duplicada (${formatRange(left.hour)}).`,
+            ranges: [toRange(left.hour), toRange(right.hour)],
+          });
+          continue;
+        }
 
-      if (current.opensAtMinutes < previous.closesAtMinutes) {
-        conflicts.push({
-          field: `hours[${hours.indexOf(current)}]`,
-          dayOfWeek,
-          constraints: ['overlap'],
-          message: `El ${dayName(dayOfWeek)}: las franjas ${formatRange(previous)} y ${formatRange(current)} se cruzan.`,
-          ranges: [toRange(previous), toRange(current)],
-        });
+        if (right.hour.opensAtMinutes < left.hour.closesAtMinutes) {
+          pushConflict({
+            field: `hours[${right.index}]`,
+            dayOfWeek,
+            constraints: ['overlap'],
+            message: `El ${dayName(dayOfWeek)}: las franjas ${formatRange(left.hour)} y ${formatRange(right.hour)} se cruzan.`,
+            ranges: [toRange(left.hour), toRange(right.hour)],
+          });
+        }
       }
     }
   }
