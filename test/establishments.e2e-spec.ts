@@ -303,13 +303,19 @@ describe('Establishments y membresías (e2e)', () => {
     ).toBeNull();
   });
 
-  it('solo platform-admin accede a /admin/establishments', async () => {
+  it('RT-14/RT-15: solo platform-admin accede a /admin/establishments', async () => {
     await bearer(
       request(server()).get('/api/v1/admin/establishments'),
       admin.token,
     ).expect(200);
 
-    for (const user of [player, owner1, staff1]) {
+    const anonymous = await request(server())
+      .get('/api/v1/admin/establishments')
+      .set('Origin', ORIGIN)
+      .expect(401);
+    expect(anonymous.body.code).toBe('UNAUTHENTICATED');
+
+    for (const user of [player, owner1, staff1, owner2]) {
       const denied = await bearer(
         request(server()).get('/api/v1/admin/establishments'),
         user.token,
@@ -317,17 +323,43 @@ describe('Establishments y membresías (e2e)', () => {
       expect(denied.body.code).toBe('PERMISSION_DENIED');
     }
 
-    const deniedCreate = await bearer(
+    const deniedBodies = {
+      name: 'No permitido',
+      slug: `e2e-denegado-${Date.now()}`,
+      ownerUserId: player.userId,
+    };
+
+    const anonymousCreate = await request(server())
+      .post('/api/v1/admin/establishments')
+      .set('Origin', ORIGIN)
+      .send(deniedBodies)
+      .expect(401);
+    expect(anonymousCreate.body.code).toBe('UNAUTHENTICATED');
+
+    for (const user of [player, owner1, staff1, owner2]) {
+      const deniedCreate = await bearer(
+        request(server())
+          .post('/api/v1/admin/establishments')
+          .send({ ...deniedBodies, slug: `${deniedBodies.slug}-${user.userId}` }),
+        user.token,
+      ).expect(403);
+      expect(deniedCreate.body.code).toBe('PERMISSION_DENIED');
+    }
+
+    // RT-14 positive cell: platform-admin can create an establishment.
+    const adminCreate = await bearer(
       request(server())
         .post('/api/v1/admin/establishments')
         .send({
-          name: 'No permitido',
-          slug: `e2e-denegado-${Date.now()}`,
-          ownerUserId: player.userId,
+          name: 'E2E Admin Extra',
+          slug: `e2e-admin-${Date.now()}`,
+          ownerUserId: owner2.userId,
         }),
-      player.token,
-    ).expect(403);
-    expect(deniedCreate.body.code).toBe('PERMISSION_DENIED');
+      admin.token,
+    ).expect(201);
+    expect(adminCreate.body.owner).toEqual(
+      expect.objectContaining({ userId: owner2.userId, groups: ['owner'] }),
+    );
   });
 
   it('GET /me/establishments devuelve solo las membresías propias', async () => {
@@ -369,7 +401,7 @@ describe('Establishments y membresías (e2e)', () => {
     expect(e2.owner?.userId).toBe(owner2.userId);
   });
 
-  it('aplica tenant guard: 403 sin membresía, 404 si la sede no existe', async () => {
+  it('NEG-02: aplica tenant guard: 403 sin membresía, 404 si la sede no existe', async () => {
     await bearer(
       request(server()).get(`/api/v1/establishments/${e1.id}`),
       owner1.token,
@@ -390,7 +422,7 @@ describe('Establishments y membresías (e2e)', () => {
     expect(missing.body.code).toBe('ESTABLISHMENT_NOT_FOUND');
   });
 
-  it('E1/E2: owner de una sede recibe 403 en la otra', async () => {
+  it('NEG-02: owner de una sede recibe 403 T en la otra', async () => {
     const owner1InE2 = await bearer(
       request(server()).get(`/api/v1/establishments/${e2.id}`),
       owner1.token,
@@ -444,7 +476,7 @@ describe('Establishments y membresías (e2e)', () => {
     info.mockRestore();
   });
 
-  it('owner agrega staff; staff tiene tenant pero no membership:read', async () => {
+  it('RT-10/RT-11: owner agrega staff; matriz de principals de membresías', async () => {
     const created = await bearer(
       request(server())
         .post(`/api/v1/establishments/${e1.id}/memberships`)
@@ -473,16 +505,179 @@ describe('Establishments y membresías (e2e)', () => {
       staff1.token,
     ).expect(200);
 
-    const denied = await bearer(
+    // RT-10: GET memberships for the six principals of the matrix.
+    const ownerList = await listMemberships(owner1.token, e1.id);
+    expect(
+      ownerList.some((membership) => membership.userId === staff1.userId),
+    ).toBe(true);
+    await listMemberships(admin.token, e1.id);
+
+    const staffDenied = await bearer(
       request(server()).get(
         `/api/v1/establishments/${e1.id}/memberships`,
       ),
       staff1.token,
     ).expect(403);
-    expect(denied.body.code).toBe('PERMISSION_DENIED');
+    expect(staffDenied.body.code).toBe('PERMISSION_DENIED');
+
+    const playerDenied = await bearer(
+      request(server()).get(
+        `/api/v1/establishments/${e1.id}/memberships`,
+      ),
+      player.token,
+    ).expect(403);
+    expect(playerDenied.body.code).toBe('TENANT_FORBIDDEN');
+
+    const crossTenantDenied = await bearer(
+      request(server()).get(
+        `/api/v1/establishments/${e1.id}/memberships`,
+      ),
+      owner2.token,
+    ).expect(403);
+    expect(crossTenantDenied.body.code).toBe('TENANT_FORBIDDEN');
+
+    const anonymous = await request(server())
+      .get(`/api/v1/establishments/${e1.id}/memberships`)
+      .set('Origin', ORIGIN)
+      .expect(401);
+    expect(anonymous.body.code).toBe('UNAUTHENTICATED');
+
+    // RT-11: POST memberships for the six principals.
+    const staffPost = await bearer(
+      request(server())
+        .post(`/api/v1/establishments/${e1.id}/memberships`)
+        .send({ userId: owner3.userId, groupSlug: 'staff' }),
+      staff1.token,
+    ).expect(403);
+    expect(staffPost.body.code).toBe('PERMISSION_DENIED');
+
+    for (const [user, code] of [
+      [player, 'TENANT_FORBIDDEN'],
+      [owner2, 'TENANT_FORBIDDEN'],
+    ] as const) {
+      const denied = await bearer(
+        request(server())
+          .post(`/api/v1/establishments/${e1.id}/memberships`)
+          .send({ userId: owner3.userId, groupSlug: 'staff' }),
+        user.token,
+      ).expect(403);
+      expect(denied.body.code).toBe(code);
+    }
+
+    const anonymousPost = await request(server())
+      .post(`/api/v1/establishments/${e1.id}/memberships`)
+      .set('Origin', ORIGIN)
+      .send({ userId: owner3.userId, groupSlug: 'staff' })
+      .expect(401);
+    expect(anonymousPost.body.code).toBe('UNAUTHENTICATED');
+
+    const adminPost = await bearer(
+      request(server())
+        .post(`/api/v1/establishments/${e1.id}/memberships`)
+        .send({ userId: owner3.userId, groupSlug: 'staff' }),
+      admin.token,
+    ).expect(201);
+    expect(adminPost.body).toEqual(
+      expect.objectContaining({
+        userId: owner3.userId,
+        groups: [{ slug: 'staff', name: 'Staff' }],
+      }),
+    );
   });
 
-  it('owner no puede asignar owner y el intento no crea membresía', async () => {
+  it('RT-12: PATCH memberships respeta la matriz de seis principals', async () => {
+    const memberships = await listMemberships(admin.token, e1.id);
+    const staffMembership = memberships.find(
+      (membership) => membership.userId === staff1.userId,
+    );
+    expect(staffMembership).toBeDefined();
+    const path = `/api/v1/establishments/${e1.id}/memberships/${staffMembership?.id}`;
+
+    const anonymous = await request(server())
+      .patch(path)
+      .set('Origin', ORIGIN)
+      .send({ status: 'active' })
+      .expect(401);
+    expect(anonymous.body.code).toBe('UNAUTHENTICATED');
+
+    const playerDenied = await bearer(
+      request(server()).patch(path).send({ status: 'active' }),
+      player.token,
+    ).expect(403);
+    expect(playerDenied.body.code).toBe('TENANT_FORBIDDEN');
+
+    const staffDenied = await bearer(
+      request(server()).patch(path).send({ status: 'active' }),
+      staff1.token,
+    ).expect(403);
+    expect(staffDenied.body.code).toBe('PERMISSION_DENIED');
+
+    const crossTenantDenied = await bearer(
+      request(server()).patch(path).send({ status: 'active' }),
+      owner2.token,
+    ).expect(403);
+    expect(crossTenantDenied.body.code).toBe('TENANT_FORBIDDEN');
+
+    const ownerAllowed = await bearer(
+      request(server()).patch(path).send({ status: 'active' }),
+      owner1.token,
+    ).expect(200);
+    expect(ownerAllowed.body.status).toBe('active');
+
+    const adminAllowed = await bearer(
+      request(server()).patch(path).send({ status: 'active' }),
+      admin.token,
+    ).expect(200);
+    expect(adminAllowed.body.status).toBe('active');
+  });
+
+  it('RT-13: DELETE memberships respeta la matriz de seis principals', async () => {
+    const memberships = await listMemberships(admin.token, e1.id);
+    const target = memberships.find(
+      (membership) => membership.userId === owner3.userId,
+    );
+    expect(target).toBeDefined();
+    const path = `/api/v1/establishments/${e1.id}/memberships/${target?.id}`;
+
+    const anonymous = await request(server())
+      .delete(path)
+      .set('Origin', ORIGIN)
+      .expect(401);
+    expect(anonymous.body.code).toBe('UNAUTHENTICATED');
+
+    const playerDenied = await bearer(
+      request(server()).delete(path),
+      player.token,
+    ).expect(403);
+    expect(playerDenied.body.code).toBe('TENANT_FORBIDDEN');
+
+    const staffDenied = await bearer(
+      request(server()).delete(path),
+      staff1.token,
+    ).expect(403);
+    expect(staffDenied.body.code).toBe('PERMISSION_DENIED');
+
+    const crossTenantDenied = await bearer(
+      request(server()).delete(path),
+      owner2.token,
+    ).expect(403);
+    expect(crossTenantDenied.body.code).toBe('TENANT_FORBIDDEN');
+
+    const ownerAllowed = await bearer(
+      request(server()).delete(path),
+      owner1.token,
+    ).expect(200);
+    expect(ownerAllowed.body.status).toBe('removed');
+
+    // Idempotent for the platform-admin cell; the row stays removed.
+    const adminAllowed = await bearer(
+      request(server()).delete(path),
+      admin.token,
+    ).expect(200);
+    expect(adminAllowed.body.status).toBe('removed');
+  });
+
+  it('NEG-11: owner no puede asignar owner y el intento no crea membresía', async () => {
     const denied = await bearer(
       request(server())
         .post(`/api/v1/establishments/${e1.id}/memberships`)
@@ -526,7 +721,7 @@ describe('Establishments y membresías (e2e)', () => {
     ]);
   });
 
-  it('solo una membresía activa habilita tenant (suspender staff → 403 T)', async () => {
+  it('RT-12/Q9: solo una membresía activa habilita tenant (suspender staff → 403 T)', async () => {
     const memberships = await listMemberships(admin.token, e1.id);
     const staffMembership = memberships.find(
       (membership) => membership.userId === staff1.userId,
@@ -561,9 +756,33 @@ describe('Establishments y membresías (e2e)', () => {
       request(server()).get(`/api/v1/establishments/${e1.id}`),
       staff1.token,
     ).expect(200);
+
+    // Q9/NEG-02: invited and removed memberships are treated as no membership.
+    for (const status of ['invited', 'removed'] as const) {
+      await prisma.membership.update({
+        where: { id: staffMembership?.id },
+        data: { status },
+      });
+
+      const denied = await bearer(
+        request(server()).get(`/api/v1/establishments/${e1.id}`),
+        staff1.token,
+      ).expect(403);
+      expect(denied.body.code).toBe('TENANT_FORBIDDEN');
+    }
+
+    await prisma.membership.update({
+      where: { id: staffMembership?.id },
+      data: { status: 'active' },
+    });
+
+    await bearer(
+      request(server()).get(`/api/v1/establishments/${e1.id}`),
+      staff1.token,
+    ).expect(200);
   });
 
-  it('protege al último owner: DELETE, degradación y suspensión → 409', async () => {
+  it('NEG-12/RT-12/RT-13: protege al último owner: DELETE, degradación y suspensión → 409', async () => {
     const memberships = await listMemberships(admin.token, e1.id);
     const ownerMembership = memberships.find(
       (membership) => membership.userId === owner1.userId,
@@ -609,7 +828,7 @@ describe('Establishments y membresías (e2e)', () => {
     ).toEqual(['owner']);
   });
 
-  it('con un segundo owner se puede retirar el primero; el último sigue protegido', async () => {
+  it('RT-11/RT-13/NEG-12: con un segundo owner se puede retirar el primero; el último sigue protegido', async () => {
     const created = await bearer(
       request(server())
         .post(`/api/v1/establishments/${e1.id}/memberships`)

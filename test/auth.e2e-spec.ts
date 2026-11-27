@@ -113,7 +113,7 @@ afterAll(async () => {
 });
 
 describe('Auth (e2e)', () => {
-  it('registra, verifica el correo, inicia sesión y protege /me', async () => {
+  it('RT-01: registra, verifica el correo, inicia sesión y protege /me', async () => {
     const { email, password, ip } = await registerAndVerify();
     const { response, agent, csrf } = await login(email, password, ip);
 
@@ -136,7 +136,7 @@ describe('Auth (e2e)', () => {
     expect(me.body).not.toHaveProperty('passwordHash');
   });
 
-  it('rechaza /me sin access token con problem+json', async () => {
+  it('NEG-04: rechaza /me sin access token con problem+json', async () => {
     const response = await request(server())
       .get('/api/v1/auth/me')
       .set('Origin', ORIGIN)
