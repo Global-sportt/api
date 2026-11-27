@@ -4,6 +4,8 @@ import { AuthorizationGuard } from '../../common/authz/authorization.guard';
 import { AuthzModule } from '../../common/authz/authz.module';
 import { PermissionResolver } from '../../common/authz/permission-resolver.service';
 import { TenantGuard } from '../../common/guards/tenant.guard';
+import { ScheduleController } from './schedule.controller';
+import { ScheduleService } from './schedule.service';
 import { PublicSpacesController, SpacesController } from './spaces.controller';
 import { SpacesService } from './spaces.service';
 import { SlotsService } from './slots.service';
@@ -18,9 +20,10 @@ import { SlotsService } from './slots.service';
  */
 @Module({
   imports: [AuthzModule],
-  controllers: [PublicSpacesController, SpacesController],
+  controllers: [PublicSpacesController, SpacesController, ScheduleController],
   providers: [
     SpacesService,
+    ScheduleService,
     SlotsService,
     TenantGuard,
     AuthorizationGuard,
