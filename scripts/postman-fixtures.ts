@@ -22,7 +22,10 @@ import {
 } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { provisionEstablishmentGroups } from '../src/common/authz/establishment-groups';
-import { PLAYER_GROUP_SLUG, PLATFORM_ADMIN_GROUP_SLUG } from '../src/common/authz/permissions';
+import {
+  SYSTEM_KEY_PLATFORM_ADMIN,
+  SYSTEM_KEY_PLAYER,
+} from '../src/common/authz/permissions';
 
 const prisma = new PrismaClient();
 
@@ -87,22 +90,22 @@ async function hashPassword(): Promise<string> {
   });
 }
 
-async function ensureGlobalGroup(slug: string): Promise<string> {
+async function ensureGlobalGroup(systemKey: string): Promise<string> {
   const group = await prisma.securityGroup.findFirst({
-    where: { establishmentId: null, slug, scope: GroupScope.global },
+    where: { establishmentId: null, systemKey, scope: GroupScope.global },
     select: { id: true },
   });
   if (!group) {
     throw new Error(
-      `Falta el grupo global "${slug}". Ejecuta "npx prisma db seed" antes de los fixtures.`,
+      `Falta el grupo global de sistema "${systemKey}". Ejecuta "npx prisma db seed" antes de los fixtures.`,
     );
   }
   return group.id;
 }
 
 async function ensureUsers(passwordHash: string): Promise<UserMap> {
-  const players = await ensureGlobalGroup(PLAYER_GROUP_SLUG);
-  const platformAdmins = await ensureGlobalGroup(PLATFORM_ADMIN_GROUP_SLUG);
+  const players = await ensureGlobalGroup(SYSTEM_KEY_PLAYER);
+  const platformAdmins = await ensureGlobalGroup(SYSTEM_KEY_PLATFORM_ADMIN);
   const users: UserMap = {};
 
   for (const definition of USERS) {

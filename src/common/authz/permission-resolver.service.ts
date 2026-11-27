@@ -5,7 +5,7 @@ import {
   PermissionScope,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PLATFORM_ADMIN_GROUP_SLUG } from './permissions';
+import { SYSTEM_KEY_PLATFORM_ADMIN } from './permissions';
 
 const PERMISSIONS_CACHE_TTL_MS = 60_000;
 const AUTHORIZATION_VERSION_ID = 1;
@@ -101,7 +101,7 @@ export class PermissionResolver {
           select: {
             group: {
               select: {
-                slug: true,
+                systemKey: true,
                 scope: true,
                 permissions: {
                   select: {
@@ -121,7 +121,7 @@ export class PermissionResolver {
 
     for (const assignment of user?.globalGroups ?? []) {
       if (assignment.group.scope !== GroupScope.global) continue;
-      if (assignment.group.slug === PLATFORM_ADMIN_GROUP_SLUG) {
+      if (assignment.group.systemKey === SYSTEM_KEY_PLATFORM_ADMIN) {
         isPlatformAdmin = true;
       }
       this.mergeGrants(permissions, assignment.group.permissions);

@@ -180,6 +180,17 @@ export const PLATFORM_ADMIN_GROUP_SLUG = 'platform-admin';
 export const OWNER_GROUP_SLUG = 'owner';
 export const STAFF_GROUP_SLUG = 'staff';
 
+/**
+ * Marcadores estables de los grupos de sistema (columna
+ * `security_groups.system_key`). Son inmutables y no dependen del slug, que
+ * puede renombrarse. La base de datos valida la correspondencia con `scope` y
+ * el trigger Q8 identifica platform-admin por `global:platform-admin`.
+ */
+export const SYSTEM_KEY_PLAYER = 'global:player';
+export const SYSTEM_KEY_PLATFORM_ADMIN = 'global:platform-admin';
+export const SYSTEM_KEY_OWNER = 'establishment:owner';
+export const SYSTEM_KEY_STAFF = 'establishment:staff';
+
 export const PLAYER_GRANT_CODES: PermissionCode[] = [
   'booking:read',
   'booking:create',

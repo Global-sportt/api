@@ -8,12 +8,15 @@ import {
   OWNER_GROUP_SLUG,
   STAFF_GRANT_CODES,
   STAFF_GROUP_SLUG,
+  SYSTEM_KEY_OWNER,
+  SYSTEM_KEY_STAFF,
   type PermissionCode,
 } from './permissions';
 
 interface TenantGroupDefinition {
   slug: string;
   name: string;
+  systemKey: string;
   grantCodes: PermissionCode[];
 }
 
@@ -21,11 +24,13 @@ const TENANT_GROUPS: TenantGroupDefinition[] = [
   {
     slug: OWNER_GROUP_SLUG,
     name: 'Dueño de sede',
+    systemKey: SYSTEM_KEY_OWNER,
     grantCodes: OWNER_GRANT_CODES,
   },
   {
     slug: STAFF_GROUP_SLUG,
     name: 'Staff',
+    systemKey: SYSTEM_KEY_STAFF,
     grantCodes: STAFF_GRANT_CODES,
   },
 ];
@@ -56,21 +61,31 @@ export async function provisionEstablishmentGroups(
     // NULL), así que PostgreSQL no puede inferirlo con ON CONFLICT. Se hace
     // find + update/create dentro de la misma transacción; el índice sigue
     // siendo el backstop ante una carrera.
-    const existing = await tx.securityGroup.findFirst({
-      where: {
-        establishmentId,
-        slug: definition.slug,
-      },
-      select: { id: true },
-    });
+    const existing =
+      (await tx.securityGroup.findFirst({
+        where: {
+          establishmentId,
+          systemKey: definition.systemKey,
+        },
+        select: { id: true },
+      })) ??
+      (await tx.securityGroup.findFirst({
+        where: {
+          establishmentId,
+          slug: definition.slug,
+        },
+        select: { id: true },
+      }));
 
     const group = existing
       ? await tx.securityGroup.update({
           where: { id: existing.id },
           data: {
+            slug: definition.slug,
             name: definition.name,
             scope: GroupScope.establishment,
             isSystem: true,
+            systemKey: definition.systemKey,
           },
           select: { id: true },
         })
@@ -81,6 +96,7 @@ export async function provisionEstablishmentGroups(
             name: definition.name,
             scope: GroupScope.establishment,
             isSystem: true,
+            systemKey: definition.systemKey,
           },
           select: { id: true },
         });

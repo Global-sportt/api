@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { GroupScope, Prisma, UserStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PLAYER_GROUP_SLUG } from '../../common/authz/permissions';
+import {
+  PLAYER_GROUP_SLUG,
+  SYSTEM_KEY_PLAYER,
+} from '../../common/authz/permissions';
 import { normalizeEmail } from '../../common/utils/crypto.util';
 
 export const userWithProfile = {
@@ -243,7 +246,7 @@ export class UsersService {
     const playerGroup = await tx.securityGroup.findFirst({
       where: {
         establishmentId: null,
-        slug: PLAYER_GROUP_SLUG,
+        systemKey: SYSTEM_KEY_PLAYER,
         scope: GroupScope.global,
       },
       select: { id: true },
@@ -251,7 +254,7 @@ export class UsersService {
 
     if (!playerGroup) {
       throw new Error(
-        `No existe el grupo global "${PLAYER_GROUP_SLUG}". Ejecuta "npx prisma db seed" antes de registrar usuarios.`,
+        `No existe el grupo global de sistema "${PLAYER_GROUP_SLUG}" (${SYSTEM_KEY_PLAYER}). Ejecuta "npx prisma db seed" antes de registrar usuarios.`,
       );
     }
 
