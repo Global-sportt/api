@@ -70,6 +70,7 @@ describe('provisionEstablishmentGroups', () => {
         name: 'Dueño de sede',
         scope: GroupScope.establishment,
         isSystem: true,
+        systemKey: 'establishment:owner',
       },
       select: { id: true },
     });
@@ -103,9 +104,11 @@ describe('provisionEstablishmentGroups', () => {
     expect(tx.securityGroup.update).toHaveBeenCalledWith({
       where: { id: 'existing-owner' },
       data: {
+        slug: 'owner',
         name: 'Dueño de sede',
         scope: GroupScope.establishment,
         isSystem: true,
+        systemKey: 'establishment:owner',
       },
       select: { id: true },
     });
