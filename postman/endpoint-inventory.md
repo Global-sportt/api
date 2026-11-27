@@ -74,6 +74,14 @@ Estados: `pending_payment`, `confirmed`, `checked_in`, `completed`, `cancelled`,
 Precio: calculado por el servidor desde la franja T5; el cliente no envía precio.
 Idempotencia: misma clave + mismo hash → 200 replay; misma clave + hash distinto → 409; reserva terminal → 409.
 
+## Dashboard
+
+| Método | Ruta | Auth / permiso | Query | Respuestas |
+|---|---|---|---|---|
+| GET | `/admin/dashboard` | Bearer; `report:read` platform | `from=YYYY-MM-DD?`, `to=YYYY-MM-DD?` | 200; 400; 403 P |
+
+Periodo por defecto: últimos 30 días incluido hoy. Máximo 366 días y `from <= to`; las fronteras son días locales en `America/Bogota`. Respuesta: `period`, `establishments`, `users`, `bookings` (`period`, `today`, `byStatus`, `revenueMinor`, `currency`), `topEstablishments` (máx. 5) y `recentBookings` (máx. 10). `revenueMinor` suma `confirmed`, `checked_in`, `completed` y `no_show`; los BigInt se serializan como string. Un dueño/staff con scope `establishment` recibe 403: la ruta no lleva `establishmentId` y es solo de plataforma.
+
 ## Health
 
 | Método | Ruta | Auth | Respuesta |
