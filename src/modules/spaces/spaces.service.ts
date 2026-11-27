@@ -1,13 +1,72 @@
 import { Injectable } from '@nestjs/common';
-import { EstablishmentStatus, SpaceStatus } from '@prisma/client';
+import {
+  BookingStatus,
+  EstablishmentStatus,
+  Prisma,
+  SpaceStatus,
+} from '@prisma/client';
 import { AppError } from '../../common/errors/app-error';
 import { isValidDateOnly } from '../../common/time/zoned-time';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  slotOverlapsBookings,
+  type BookingRange,
+} from '../bookings/booking-slot';
 import { SlotsService } from './slots.service';
 import type {
   GeneratedSlot,
   SlotScheduleException,
 } from './slot-generator.types';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The local date can be up to ±14 h from UTC midnight, so a ±1/2-day window
+ * around the UTC date safely contains every booking that could overlap any
+ * generated slot. The exact overlap is checked in memory per slot.
+ */
+function availabilityWindow(date: string): { start: Date; end: Date } {
+  const base = new Date(`${date}T00:00:00.000Z`);
+  return {
+    start: new Date(base.getTime() - DAY_MS),
+    end: new Date(base.getTime() + 2 * DAY_MS),
+  };
+}
+
+/**
+ * Booked/held slots are excluded for the public and tenant availability
+ * endpoints. Pending holds count until `expires_at`; after that they are
+ * ignored even if the 60 s expiry job has not run yet (Q7).
+ */
+function blockingBookingsWhere(window: {
+  start: Date;
+  end: Date;
+}): Prisma.BookingWhereInput {
+  return {
+    startsAt: { gte: window.start, lt: window.end },
+    endsAt: { gt: window.start },
+    OR: [
+      {
+        status: {
+          in: [BookingStatus.confirmed, BookingStatus.checked_in],
+        },
+      },
+      {
+        status: BookingStatus.pending_payment,
+        expiresAt: { gt: new Date() },
+      },
+    ],
+  };
+}
+
+function toBookingRanges(
+  bookings: ReadonlyArray<{ startsAt: Date; endsAt: Date }> | undefined,
+): BookingRange[] {
+  return (bookings ?? []).map((booking) => ({
+    startsAt: booking.startsAt,
+    endsAt: booking.endsAt,
+  }));
+}
 
 export interface OperatingHourResponse {
   dayOfWeek: number;
@@ -108,6 +167,7 @@ export class SpacesService {
 
     const establishment = await this.requireEstablishment(establishmentId);
     const scheduleExceptionDate = toDateOnlyDate(date);
+    const bookingWindow = availabilityWindow(date);
 
     const space = await this.prisma.space.findFirst({
       where: { id: spaceId, establishmentId },
@@ -115,6 +175,10 @@ export class SpacesService {
         operatingHours: true,
         priceRules: true,
         exceptions: { where: { date: scheduleExceptionDate } },
+        bookings: {
+          where: blockingBookingsWhere(bookingWindow),
+          select: { startsAt: true, endsAt: true },
+        },
       },
     });
 
@@ -126,19 +190,25 @@ export class SpacesService {
       );
     }
 
-    const slots = this.slots.generate({
-      space: {
-        id: space.id,
-        slotMinutes: space.slotMinutes,
-        bufferMinutes: space.bufferMinutes,
+    const booked = toBookingRanges(space.bookings);
+    const slots = this.slots.generate(
+      {
+        space: {
+          id: space.id,
+          slotMinutes: space.slotMinutes,
+          bufferMinutes: space.bufferMinutes,
+        },
+        timezone: establishment.timezone,
+        date,
+        currency: establishment.currency,
+        operatingHours: space.operatingHours,
+        exception: toSlotException(space.exceptions[0]),
+        priceRules: space.priceRules,
       },
-      timezone: establishment.timezone,
-      date,
-      currency: establishment.currency,
-      operatingHours: space.operatingHours,
-      exception: toSlotException(space.exceptions[0]),
-      priceRules: space.priceRules,
-    });
+      {
+        isAvailable: (slot) => !slotOverlapsBookings(slot, booked),
+      },
+    );
 
     return {
       date,
@@ -156,6 +226,7 @@ export class SpacesService {
   ): Promise<PublicAvailabilityResponse> {
     this.assertDate(date);
     const scheduleExceptionDate = toDateOnlyDate(date);
+    const bookingWindow = availabilityWindow(date);
 
     const establishment = await this.prisma.establishment.findUnique({
       where: { slug },
@@ -173,6 +244,10 @@ export class SpacesService {
           include: {
             operatingHours: true,
             priceRules: true,
+            bookings: {
+              where: blockingBookingsWhere(bookingWindow),
+              select: { startsAt: true, endsAt: true },
+            },
           },
         },
       },
@@ -207,27 +282,36 @@ export class SpacesService {
       exceptionsBySpace.set(exception.spaceId, toSlotException(exception)!);
     }
 
-    const spaces = establishment.spaces.map((space) => ({
-      id: space.id,
-      name: space.name,
-      slug: space.slug,
-      sport: space.sport,
-      slotMinutes: space.slotMinutes,
-      bufferMinutes: space.bufferMinutes,
-      slots: this.slots.generate({
-        space: {
-          id: space.id,
-          slotMinutes: space.slotMinutes,
-          bufferMinutes: space.bufferMinutes,
-        },
-        timezone: establishment.timezone,
-        date,
-        currency: establishment.currency,
-        operatingHours: space.operatingHours,
-        exception: exceptionsBySpace.get(space.id) ?? null,
-        priceRules: space.priceRules,
-      }),
-    }));
+    const spaces = establishment.spaces.map((space) => {
+      const booked = toBookingRanges(space.bookings);
+
+      return {
+        id: space.id,
+        name: space.name,
+        slug: space.slug,
+        sport: space.sport,
+        slotMinutes: space.slotMinutes,
+        bufferMinutes: space.bufferMinutes,
+        slots: this.slots.generate(
+          {
+            space: {
+              id: space.id,
+              slotMinutes: space.slotMinutes,
+              bufferMinutes: space.bufferMinutes,
+            },
+            timezone: establishment.timezone,
+            date,
+            currency: establishment.currency,
+            operatingHours: space.operatingHours,
+            exception: exceptionsBySpace.get(space.id) ?? null,
+            priceRules: space.priceRules,
+          },
+          {
+            isAvailable: (slot) => !slotOverlapsBookings(slot, booked),
+          },
+        ),
+      };
+    });
 
     return {
       date,
