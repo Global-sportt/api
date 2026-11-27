@@ -19,6 +19,7 @@
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
+    "postman:fixtures": "ts-node scripts/postman-fixtures.ts",
     "lint": "eslint \"{src,test,prisma}/**/*.ts\"",
     "postinstall": "prisma generate"
   },
