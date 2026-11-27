@@ -1,3 +1,20 @@
+/**
+ * `@cerbos/orm-prisma` is CommonJS but imports the ESM-only `@cerbos/core`
+ * package. Node 22 can require ESM natively, but Jest's module runtime cannot;
+ * the adapter only consumes `PlanKind` from that package at runtime. Mocking
+ * those three constants keeps the real Prisma query-plan translator in the
+ * e2e suite without adding a Babel/ESM transform to the Jest config.
+ */
+if (typeof jest !== 'undefined') {
+  jest.mock('@cerbos/core', () => ({
+    PlanKind: {
+      ALWAYS_ALLOWED: 'KIND_ALWAYS_ALLOWED',
+      ALWAYS_DENIED: 'KIND_ALWAYS_DENIED',
+      CONDITIONAL: 'KIND_CONDITIONAL',
+    },
+  }));
+}
+
 process.env.NODE_ENV = 'test';
 process.env.PORT = '3001';
 process.env.API_PREFIX = 'api/v1';
