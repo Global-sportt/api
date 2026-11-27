@@ -71,6 +71,9 @@ let inactive: { id: string; slug: string };
 let spaceE1: string;
 let spaceE2: string;
 let spaceInactive: string;
+let managedSpaceId: string;
+let autoSlugSpaceId: string;
+let stateSpaceId: string;
 let date: string;
 let bookedStart: string;
 let bookedEnd: string;
@@ -578,6 +581,653 @@ describe('Spaces y disponibilidad (T5, HTTP e2e)', () => {
       expect(tenantStarts).toContain(
         wallClockToUtc(date, 9 * 60, TIMEZONE).instant.toISOString(),
       );
+    });
+  });
+
+  describe('POST /establishments/:id/spaces', () => {
+    it('crea una cancha con slug explícito, tarifa fija y valores por defecto', async () => {
+      const response = await auth(
+        request(server()).post(`/api/v1/establishments/${e1.id}/spaces`),
+        'ownerE1',
+      )
+        .send({
+          name: 'Cancha Auxiliar',
+          slug: 'cancha-auxiliar',
+          sport: 'Futbol',
+          slotMinutes: 90,
+          bufferMinutes: 10,
+          basePriceMinor: 4500000,
+        })
+        .expect(201);
+
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          id: expect.any(String),
+          name: 'Cancha Auxiliar',
+          slug: 'cancha-auxiliar',
+          sport: 'Futbol',
+          slotMinutes: 90,
+          bufferMinutes: 10,
+          basePriceMinor: '4500000',
+          status: 'active',
+          operatingHours: [],
+        }),
+      );
+      managedSpaceId = response.body.id;
+    });
+
+    it('genera el slug desde el nombre (minúsculas, sin acentos, guiones)', async () => {
+      const response = await auth(
+        request(server()).post(`/api/v1/establishments/${e1.id}/spaces`),
+        'ownerE1',
+      )
+        .send({ name: 'Cancha Fútbol Ñandú', sport: 'futbol' })
+        .expect(201);
+
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          name: 'Cancha Fútbol Ñandú',
+          slug: 'cancha-futbol-nandu',
+          sport: 'futbol',
+          slotMinutes: 60,
+          bufferMinutes: 0,
+          basePriceMinor: null,
+          status: 'active',
+        }),
+      );
+      autoSlugSpaceId = response.body.id;
+    });
+
+    it('rechaza un slug duplicado del mismo establecimiento con 409', async () => {
+      const response = await auth(
+        request(server()).post(`/api/v1/establishments/${e1.id}/spaces`),
+        'ownerE1',
+      )
+        .send({
+          name: 'Cancha Repetida',
+          slug: 'cancha-auxiliar',
+          sport: 'futbol',
+        })
+        .expect(409);
+      expectProblem(response, 409, 'SPACE_SLUG_CONFLICT');
+    });
+
+    it('permite el mismo slug en otro establecimiento', async () => {
+      const response = await auth(
+        request(server()).post(`/api/v1/establishments/${e2.id}/spaces`),
+        'ownerE2',
+      )
+        .send({
+          name: 'Cancha Auxiliar E2',
+          slug: 'cancha-auxiliar',
+          sport: 'futbol',
+        })
+        .expect(201);
+
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          slug: 'cancha-auxiliar',
+          sport: 'futbol',
+        }),
+      );
+    });
+
+    it('exige el tipo de deporte (400 VALIDATION_ERROR)', async () => {
+      const response = await auth(
+        request(server()).post(`/api/v1/establishments/${e1.id}/spaces`),
+        'ownerE1',
+      )
+        .send({ name: 'Cancha Sin Deporte' })
+        .expect(400);
+
+      expectProblem(response, 400, 'VALIDATION_ERROR');
+      expect(response.body.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ field: 'sport' }),
+        ]),
+      );
+    });
+
+    it.each([0, -1000])(
+      'rechaza basePriceMinor = %s con 400 VALIDATION_ERROR',
+      async (basePriceMinor) => {
+        const response = await auth(
+          request(server()).post(`/api/v1/establishments/${e1.id}/spaces`),
+          'ownerE1',
+        )
+          .send({
+            name: `Cancha Tarifa ${basePriceMinor}`,
+            sport: 'futbol',
+            basePriceMinor,
+          })
+          .expect(400);
+
+        expectProblem(response, 400, 'VALIDATION_ERROR');
+        expect(response.body.details).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ field: 'basePriceMinor' }),
+          ]),
+        );
+      },
+    );
+
+    it.each([
+      {
+        label: 'name vacío',
+        body: { name: '', sport: 'futbol' },
+        field: 'name',
+      },
+      {
+        label: 'sport en blanco',
+        body: { name: 'Sport Blanco', sport: '   ' },
+        field: 'sport',
+      },
+      {
+        label: 'slotMinutes fuera de rango',
+        body: { name: 'Slot', sport: 'futbol', slotMinutes: 10 },
+        field: 'slotMinutes',
+      },
+      {
+        label: 'bufferMinutes fuera de rango',
+        body: { name: 'Buffer', sport: 'futbol', bufferMinutes: 121 },
+        field: 'bufferMinutes',
+      },
+      {
+        label: 'status desconocido',
+        body: { name: 'Estado', sport: 'futbol', status: 'deleted' },
+        field: 'status',
+      },
+      {
+        label: 'slug inválido',
+        body: { name: 'Slug', sport: 'futbol', slug: 'Slug Invalido' },
+        field: 'slug',
+      },
+    ])(
+      'rechaza $label con 400 VALIDATION_ERROR',
+      async ({ body, field }) => {
+        const response = await auth(
+          request(server()).post(`/api/v1/establishments/${e1.id}/spaces`),
+          'ownerE1',
+        )
+          .send(body)
+          .expect(400);
+
+        expectProblem(response, 400, 'VALIDATION_ERROR');
+        expect(response.body.details).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ field }),
+          ]),
+        );
+      },
+    );
+
+    const matrix: Array<{
+      principal: PrincipalName;
+      status: number;
+      code?: string;
+    }> = [
+      { principal: 'anon', status: 401, code: 'UNAUTHENTICATED' },
+      { principal: 'playerA', status: 403, code: 'TENANT_FORBIDDEN' },
+      { principal: 'staffE1', status: 403, code: 'PERMISSION_DENIED' },
+      { principal: 'ownerE1', status: 201 },
+      { principal: 'ownerE2', status: 403, code: 'TENANT_FORBIDDEN' },
+      { principal: 'admin', status: 201 },
+    ];
+
+    it.each(matrix)(
+      'POST /establishments/E1/spaces · $principal → $status',
+      async ({ principal, status, code }) => {
+        const response = await auth(
+          request(server()).post(`/api/v1/establishments/${e1.id}/spaces`),
+          principal,
+        ).send({
+          name: `Cancha ${principal}`,
+          slug: `cancha-auth-${principal.toLowerCase()}`,
+          sport: 'futbol',
+        });
+
+        expect(response.status).toBe(status);
+        if (code) expect(response.body.code).toBe(code);
+        if (status === 201) {
+          expect(response.body.slug).toBe(
+            `cancha-auth-${principal.toLowerCase()}`,
+          );
+        }
+      },
+    );
+  });
+
+  describe('PATCH /establishments/:id/spaces/:spaceId', () => {
+    let editableId: string;
+
+    beforeAll(async () => {
+      const created = await auth(
+        request(server()).post(`/api/v1/establishments/${e1.id}/spaces`),
+        'ownerE1',
+      )
+        .send({
+          name: 'Cancha Editable',
+          slug: 'cancha-editable',
+          sport: 'futbol',
+          slotMinutes: 60,
+          bufferMinutes: 0,
+        })
+        .expect(201);
+      editableId = created.body.id;
+
+      const state = await auth(
+        request(server()).post(`/api/v1/establishments/${e1.id}/spaces`),
+        'ownerE1',
+      )
+        .send({
+          name: 'Cancha Estado',
+          slug: 'cancha-estado',
+          sport: 'tenis',
+        })
+        .expect(201);
+      stateSpaceId = state.body.id;
+    });
+
+    it('actualiza nombre, deporte, duración, buffer y tarifa sin tocar el slug', async () => {
+      const response = await auth(
+        request(server()).patch(
+          `/api/v1/establishments/${e1.id}/spaces/${editableId}`,
+        ),
+        'ownerE1',
+      )
+        .send({
+          name: 'Cancha Editada',
+          sport: 'baloncesto',
+          slotMinutes: 45,
+          bufferMinutes: 15,
+          basePriceMinor: 120000,
+        })
+        .expect(200);
+
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          id: editableId,
+          name: 'Cancha Editada',
+          slug: 'cancha-editable',
+          sport: 'baloncesto',
+          slotMinutes: 45,
+          bufferMinutes: 15,
+          basePriceMinor: '120000',
+          status: 'active',
+        }),
+      );
+
+      const persisted = await prisma.space.findUniqueOrThrow({
+        where: { id: editableId },
+        select: {
+          name: true,
+          slug: true,
+          sport: true,
+          slotMinutes: true,
+          bufferMinutes: true,
+          basePriceMinor: true,
+        },
+      });
+      expect(persisted).toEqual({
+        name: 'Cancha Editada',
+        slug: 'cancha-editable',
+        sport: 'baloncesto',
+        slotMinutes: 45,
+        bufferMinutes: 15,
+        basePriceMinor: 120000n,
+      });
+    });
+
+    it('cambia el estado a maintenance y a inactive, y el listado lo refleja', async () => {
+      const maintenance = await auth(
+        request(server()).patch(
+          `/api/v1/establishments/${e1.id}/spaces/${stateSpaceId}`,
+        ),
+        'ownerE1',
+      )
+        .send({ status: 'maintenance' })
+        .expect(200);
+      expect(maintenance.body.status).toBe('maintenance');
+
+      const maintenanceList = await auth(
+        request(server()).get(
+          `/api/v1/establishments/${e1.id}/spaces?status=maintenance`,
+        ),
+        'ownerE1',
+      ).expect(200);
+      expect(
+        maintenanceList.body.map((space: { id: string }) => space.id),
+      ).toContain(stateSpaceId);
+
+      const inactive = await auth(
+        request(server()).patch(
+          `/api/v1/establishments/${e1.id}/spaces/${stateSpaceId}`,
+        ),
+        'ownerE1',
+      )
+        .send({ status: 'inactive' })
+        .expect(200);
+      expect(inactive.body.status).toBe('inactive');
+
+      const inactiveList = await auth(
+        request(server()).get(
+          `/api/v1/establishments/${e1.id}/spaces?status=inactive`,
+        ),
+        'ownerE1',
+      ).expect(200);
+      expect(
+        inactiveList.body.map((space: { id: string }) => space.id),
+      ).toContain(stateSpaceId);
+    });
+
+    it('pasar a maintenance conserva la reserva confirmada y sigue visible en el listado tenant', async () => {
+      const suffix = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      const bookingSpace = await prisma.space.create({
+        data: {
+          establishmentId: e1.id,
+          name: 'Cancha Mantenimiento',
+          slug: `cancha-mantenimiento-${suffix}`,
+          sport: 'futbol',
+          operatingHours: {
+            create: [
+              {
+                dayOfWeek: dayOfWeekForDateOnly(date),
+                opensAtMinutes: 13 * 60,
+                closesAtMinutes: 15 * 60,
+              },
+            ],
+          },
+        },
+        select: { id: true },
+      });
+
+      const booking = await prisma.booking.create({
+        data: {
+          publicCode: `T5-MAINT-${suffix}`,
+          establishmentId: e1.id,
+          spaceId: bookingSpace.id,
+          playerId: users.playerA!.id,
+          createdByUserId: users.playerA!.id,
+          startsAt: wallClockToUtc(date, 13 * 60, TIMEZONE).instant,
+          endsAt: wallClockToUtc(date, 14 * 60, TIMEZONE).instant,
+          status: BookingStatus.confirmed,
+          totalMinor: 0n,
+          currency: 'COP',
+        },
+        select: { id: true },
+      });
+
+      const patched = await auth(
+        request(server()).patch(
+          `/api/v1/establishments/${e1.id}/spaces/${bookingSpace.id}`,
+        ),
+        'ownerE1',
+      )
+        .send({ status: 'maintenance' })
+        .expect(200);
+      expect(patched.body.status).toBe('maintenance');
+
+      // The tenant booking list does not filter by space status: the
+      // confirmed reservation is still returned after the status change.
+      const bookings = await auth(
+        request(server()).get(
+          `/api/v1/establishments/${e1.id}/bookings?spaceId=${bookingSpace.id}`,
+        ),
+        'ownerE1',
+      ).expect(200);
+      expect(
+        bookings.body.map((row: { id: string }) => row.id),
+      ).toContain(booking.id);
+
+      const persisted = await prisma.space.findUniqueOrThrow({
+        where: { id: bookingSpace.id },
+        select: { status: true },
+      });
+      expect(persisted.status).toBe('maintenance');
+    });
+
+    it('rechaza un cuerpo vacío con 400 VALIDATION_ERROR', async () => {
+      const response = await auth(
+        request(server()).patch(
+          `/api/v1/establishments/${e1.id}/spaces/${editableId}`,
+        ),
+        'ownerE1',
+      )
+        .send({})
+        .expect(400);
+      expectProblem(response, 400, 'VALIDATION_ERROR');
+    });
+
+    it.each([
+      { label: 'status inválido', body: { status: 'deleted' } },
+      { label: 'slotMinutes fuera de rango', body: { slotMinutes: 5 } },
+      { label: 'bufferMinutes fuera de rango', body: { bufferMinutes: 200 } },
+      { label: 'basePriceMinor no positivo', body: { basePriceMinor: 0 } },
+      { label: 'nombre vacío', body: { name: '' } },
+      { label: 'deporte en blanco', body: { sport: '  ' } },
+    ])('rechaza $label con 400 VALIDATION_ERROR', async ({ body }) => {
+      const response = await auth(
+        request(server()).patch(
+          `/api/v1/establishments/${e1.id}/spaces/${editableId}`,
+        ),
+        'ownerE1',
+      )
+        .send(body)
+        .expect(400);
+      expectProblem(response, 400, 'VALIDATION_ERROR');
+    });
+
+    it('una cancha de otro establecimiento responde 404 SPACE_NOT_FOUND', async () => {
+      const response = await auth(
+        request(server()).patch(
+          `/api/v1/establishments/${e1.id}/spaces/${spaceE2}`,
+        ),
+        'ownerE1',
+      )
+        .send({ name: 'Intento Cross Tenant' })
+        .expect(404);
+      expectProblem(response, 404, 'SPACE_NOT_FOUND');
+    });
+
+    it('una cancha inexistente responde 404 SPACE_NOT_FOUND', async () => {
+      const response = await auth(
+        request(server()).patch(
+          `/api/v1/establishments/${e1.id}/spaces/${randomUUID()}`,
+        ),
+        'ownerE1',
+      )
+        .send({ name: 'No existe' })
+        .expect(404);
+      expectProblem(response, 404, 'SPACE_NOT_FOUND');
+    });
+
+    const matrix: Array<{
+      principal: PrincipalName;
+      status: number;
+      code?: string;
+    }> = [
+      { principal: 'anon', status: 401, code: 'UNAUTHENTICATED' },
+      { principal: 'playerA', status: 403, code: 'TENANT_FORBIDDEN' },
+      { principal: 'staffE1', status: 403, code: 'PERMISSION_DENIED' },
+      { principal: 'ownerE1', status: 200 },
+      { principal: 'ownerE2', status: 403, code: 'TENANT_FORBIDDEN' },
+      { principal: 'admin', status: 200 },
+    ];
+
+    it.each(matrix)(
+      'PATCH /establishments/E1/spaces/:spaceId · $principal → $status',
+      async ({ principal, status, code }) => {
+        const response = await auth(
+          request(server()).patch(
+            `/api/v1/establishments/${e1.id}/spaces/${editableId}`,
+          ),
+          principal,
+        ).send({ name: 'Cancha Editable' });
+
+        expect(response.status).toBe(status);
+        if (code) expect(response.body.code).toBe(code);
+      },
+    );
+  });
+
+  describe('GET /establishments/:id/spaces — filtros', () => {
+    it('filtra por sport sin distinguir mayúsculas y no cruza tenants', async () => {
+      const response = await auth(
+        request(server()).get(
+          `/api/v1/establishments/${e1.id}/spaces?sport=FUTBOL`,
+        ),
+        'ownerE1',
+      ).expect(200);
+
+      expect(response.body.length).toBeGreaterThan(0);
+      for (const space of response.body as Array<{
+        id: string;
+        sport: string | null;
+      }>) {
+        expect(space.sport?.toLowerCase()).toBe('futbol');
+        expect(space.id).not.toBe(spaceE2);
+      }
+      expect(
+        response.body.map((space: { id: string }) => space.id),
+      ).toContain(managedSpaceId);
+    });
+
+    it('filtra por status y devuelve la tarifa fija en la lista', async () => {
+      const response = await auth(
+        request(server()).get(
+          `/api/v1/establishments/${e1.id}/spaces?status=inactive`,
+        ),
+        'ownerE1',
+      ).expect(200);
+
+      expect(response.body.length).toBeGreaterThan(0);
+      for (const space of response.body as Array<{ status: string }>) {
+        expect(space.status).toBe('inactive');
+      }
+      expect(
+        response.body.map((space: { id: string }) => space.id),
+      ).toContain(stateSpaceId);
+
+      const activeFootball = await auth(
+        request(server()).get(
+          `/api/v1/establishments/${e1.id}/spaces?status=active&sport=futbol`,
+        ),
+        'ownerE1',
+      ).expect(200);
+
+      expect(
+        activeFootball.body.map((space: { id: string }) => space.id),
+      ).toContain(managedSpaceId);
+      for (const space of activeFootball.body as Array<{
+        status: string;
+        basePriceMinor: string | null;
+      }>) {
+        expect(space.status).toBe('active');
+      }
+
+      const managed = (activeFootball.body as Array<{
+        id: string;
+        basePriceMinor: string | null;
+      }>).find((space) => space.id === managedSpaceId);
+      expect(managed?.basePriceMinor).toBe('4500000');
+
+      const list = await auth(
+        request(server()).get(`/api/v1/establishments/${e1.id}/spaces`),
+        'ownerE1',
+      ).expect(200);
+      const autoSlug = (list.body as Array<{
+        id: string;
+        basePriceMinor: string | null;
+      }>).find((space) => space.id === autoSlugSpaceId);
+      expect(autoSlug?.basePriceMinor).toBeNull();
+    });
+
+    it('rechaza un status desconocido con 400 VALIDATION_ERROR', async () => {
+      const response = await auth(
+        request(server()).get(
+          `/api/v1/establishments/${e1.id}/spaces?status=archived`,
+        ),
+        'ownerE1',
+      ).expect(400);
+      expectProblem(response, 400, 'VALIDATION_ERROR');
+    });
+
+    it('no incluye canchas de otro establecimiento', async () => {
+      const response = await auth(
+        request(server()).get(`/api/v1/establishments/${e1.id}/spaces`),
+        'ownerE1',
+      ).expect(200);
+
+      const ids = response.body.map((space: { id: string }) => space.id);
+      expect(ids).not.toContain(spaceE2);
+      expect(ids).not.toContain(spaceInactive);
+    });
+  });
+
+  describe('Disponibilidad pública y estado de la cancha', () => {
+    let publicSpaceId: string;
+
+    beforeAll(async () => {
+      const created = await auth(
+        request(server()).post(`/api/v1/establishments/${e1.id}/spaces`),
+        'ownerE1',
+      )
+        .send({
+          name: 'Cancha Pública Estado',
+          slug: 'cancha-publica-estado',
+          sport: 'futbol',
+        })
+        .expect(201);
+      publicSpaceId = created.body.id;
+    });
+
+    function publicSpaceIds(body: {
+      spaces: Array<{ id: string }>;
+    }): string[] {
+      return body.spaces.map((space) => space.id);
+    }
+
+    it('oculta la cancha inactive o maintenance de la disponibilidad pública', async () => {
+      const active = await request(server())
+        .get(`/api/v1/public/establishments/${e1.slug}/availability?date=${date}`)
+        .set('Origin', ORIGIN)
+        .expect(200);
+      expect(publicSpaceIds(active.body)).toContain(publicSpaceId);
+
+      await auth(
+        request(server()).patch(
+          `/api/v1/establishments/${e1.id}/spaces/${publicSpaceId}`,
+        ),
+        'ownerE1',
+      )
+        .send({ status: 'maintenance' })
+        .expect(200);
+
+      const maintenance = await request(server())
+        .get(`/api/v1/public/establishments/${e1.slug}/availability?date=${date}`)
+        .set('Origin', ORIGIN)
+        .expect(200);
+      expect(publicSpaceIds(maintenance.body)).not.toContain(publicSpaceId);
+
+      await auth(
+        request(server()).patch(
+          `/api/v1/establishments/${e1.id}/spaces/${publicSpaceId}`,
+        ),
+        'ownerE1',
+      )
+        .send({ status: 'inactive' })
+        .expect(200);
+
+      const inactive = await request(server())
+        .get(`/api/v1/public/establishments/${e1.slug}/availability?date=${date}`)
+        .set('Origin', ORIGIN)
+        .expect(200);
+      expect(publicSpaceIds(inactive.body)).not.toContain(publicSpaceId);
+
+      // The row still exists: the public route filters it, it does not delete.
+      expect(
+        await prisma.space.findUnique({ where: { id: publicSpaceId } }),
+      ).not.toBeNull();
     });
   });
 });

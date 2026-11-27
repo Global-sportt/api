@@ -32,6 +32,7 @@ function activeSpace() {
     sport: 'futbol',
     slotMinutes: 60,
     bufferMinutes: 0,
+    basePriceMinor: 300000n,
     status: SpaceStatus.active,
     operatingHours: [
       { dayOfWeek: 1, opensAtMinutes: 9 * 60, closesAtMinutes: 12 * 60 },
@@ -83,6 +84,7 @@ describe('SpacesService', () => {
       expect.objectContaining({
         id: SPACE_ID,
         name: 'Cancha 1',
+        basePriceMinor: '300000',
         operatingHours: [
           { dayOfWeek: 1, opensAtMinutes: 540, closesAtMinutes: 720 },
         ],
