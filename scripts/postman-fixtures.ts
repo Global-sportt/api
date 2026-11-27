@@ -293,7 +293,7 @@ async function main(): Promise<void> {
     JSON.stringify(
       {
         ok: true,
-        passwordHint: 'POSTMAN_FIXTURE_PASSWORD (ver docs/postman/README.md)',
+        passwordHint: 'POSTMAN_FIXTURE_PASSWORD (ver postman/README.md)',
         users,
         establishments,
         spaces,
