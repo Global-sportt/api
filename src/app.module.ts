@@ -20,6 +20,8 @@ import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
+import { AuthzModule } from './common/authz/authz.module';
+import { EstablishmentsModule } from './modules/establishments/establishments.module';
 
 @Module({
   imports: [
@@ -46,6 +48,8 @@ import { HealthModule } from './modules/health/health.module';
     UsersModule,
     AuthModule,
     HealthModule,
+    AuthzModule,
+    EstablishmentsModule,
   ],
   providers: [
     {
