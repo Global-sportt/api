@@ -8,14 +8,18 @@
  *  - el JWKS de Google mockeado (par RSA generado en el proceso).
  *
  * Es una prueba de integración del servicio, no un e2e HTTP contra Postgres.
- * El e2e HTTP del callback queda pendiente de la migración de auth/schema de
- * A2a; no se requiere para este archivo.
+ * Al final se agregan pruebas directas de AuthController + AuthCookiesService
+ * para verificar el Set-Cookie del binding GAP-1 sin levantar la app.
  *
  * Ejecutar:
  *   npx jest --config test/jest-e2e.json test/oauth.e2e-spec.ts
  */
 import { createSign, generateKeyPairSync } from 'node:crypto';
 import jwt, { type SignOptions } from 'jsonwebtoken';
+import type {
+  Request as ExpressRequest,
+  Response as ExpressResponse,
+} from 'express';
 import { AuthEventType, UserStatus } from '@prisma/client';
 import type { RequestMetadata } from '../src/common/http/request-metadata';
 import type { AppConfigService } from '../src/config/app-config.service';
@@ -23,6 +27,9 @@ import {
   sha256,
   sha256Base64Url,
 } from '../src/common/utils/crypto.util';
+import { AuthController } from '../src/modules/auth/auth.controller';
+import { OAUTH_STATE_COOKIE } from '../src/modules/auth/auth.constants';
+import { AuthCookiesService } from '../src/modules/auth/services/auth-cookies.service';
 import {
   OAuthCallbackError,
   OAuthService,
@@ -257,13 +264,43 @@ function mockTokenEndpoint(body: unknown, ok = true) {
 async function startFlow(
   service: OAuthService,
   returnTo = '/auth/callback',
-): Promise<{ url: URL; state: string; nonce: string }> {
-  const url = new URL(await service.buildAuthorizationUrl(returnTo));
+): Promise<{
+  url: URL;
+  state: string;
+  nonce: string;
+  stateHash: string;
+  authorization: { url: string; stateHash: string };
+}> {
+  const authorization = await service.buildAuthorizationUrl(returnTo);
+  const url = new URL(authorization.url);
   const state = url.searchParams.get('state');
   const nonce = url.searchParams.get('nonce');
   expect(state).toEqual(expect.any(String));
   expect(nonce).toEqual(expect.any(String));
-  return { url, state: state as string, nonce: nonce as string };
+  expect(authorization.stateHash).toBe(sha256(state as string));
+  return {
+    url,
+    state: state as string,
+    nonce: nonce as string,
+    stateHash: authorization.stateHash,
+    authorization,
+  };
+}
+
+function fakeResponse() {
+  return {
+    cookie: jest.fn(),
+    clearCookie: jest.fn(),
+    redirect: jest.fn(),
+  };
+}
+
+function fakeRequest(cookies: Record<string, string> = {}) {
+  return {
+    id: 'req-oauth-http',
+    headers: {},
+    cookies,
+  } as unknown as ExpressRequest;
 }
 
 async function expectCallbackError(
@@ -339,16 +376,24 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
   describe('state', () => {
     it('consume el state una sola vez y rechaza el replay sin llamar a Google', async () => {
       const { service, sessions, rows } = buildService();
-      const { state, nonce } = await startFlow(service);
+      const { state, nonce, stateHash } = await startFlow(service);
       const fetchMock = mockTokenEndpoint({
         id_token: signIdToken(keys.privatePem, { nonce }),
       });
       mockJwks(service, keys.publicPem);
 
-      await service.handleCallback({ code: 'auth-code', state }, META);
+      await service.handleCallback(
+        { code: 'auth-code', state },
+        META,
+        stateHash,
+      );
 
       const redirect = await expectCallbackError(
-        service.handleCallback({ code: 'auth-code', state }, META),
+        service.handleCallback(
+          { code: 'auth-code', state },
+          META,
+          stateHash,
+        ),
         'invalid_state',
       );
 
@@ -363,26 +408,43 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
       const fetchMock = mockTokenEndpoint({ id_token: 'no-deberia-usarse' });
 
       await expectCallbackError(
-        service.handleCallback({ code: 'x', state: 'state-desconocido' }, META),
+        service.handleCallback(
+          { code: 'x', state: 'state-desconocido' },
+          META,
+          sha256('state-desconocido'),
+        ),
         'invalid_state',
       );
 
       const expired = await startFlow(service);
       (rows.at(-1) as OAuthStateRow).expiresAt = new Date(Date.now() - 1000);
       await expectCallbackError(
-        service.handleCallback({ code: 'x', state: expired.state }, META),
+        service.handleCallback(
+          { code: 'x', state: expired.state },
+          META,
+          expired.stateHash,
+        ),
         'invalid_state',
       );
 
       const foreign = await startFlow(service);
       (rows.at(-1) as OAuthStateRow).provider = 'github';
       await expectCallbackError(
-        service.handleCallback({ code: 'x', state: foreign.state }, META),
+        service.handleCallback(
+          { code: 'x', state: foreign.state },
+          META,
+          foreign.stateHash,
+        ),
         'invalid_state',
       );
 
+      const oversized = 'a'.repeat(513);
       await expectCallbackError(
-        service.handleCallback({ code: 'x', state: 'a'.repeat(513) }, META),
+        service.handleCallback(
+          { code: 'x', state: oversized },
+          META,
+          sha256(oversized),
+        ),
         'invalid_state',
       );
       expect(fetchMock).not.toHaveBeenCalled();
@@ -390,25 +452,30 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
 
     it('rechaza la carrera entre dos callbacks que consumen el mismo state', async () => {
       const { service, prisma } = buildService();
-      const { state } = await startFlow(service);
+      const { state, stateHash } = await startFlow(service);
       mockTokenEndpoint({ id_token: 'no-deberia-usarse' });
 
       prisma.oAuthState.updateMany.mockResolvedValueOnce({ count: 0 });
 
       await expectCallbackError(
-        service.handleCallback({ code: 'auth-code', state }, META),
+        service.handleCallback(
+          { code: 'auth-code', state },
+          META,
+          stateHash,
+        ),
         'invalid_state',
       );
     });
 
     it('usa el return_to guardado en el redirect de error', async () => {
       const { service } = buildService();
-      const { state } = await startFlow(service, '/mis-reservas');
+      const { state, stateHash } = await startFlow(service, '/mis-reservas');
 
       const redirect = await expectCallbackError(
         service.handleCallback(
           { state, error: 'access_denied' },
           META,
+          stateHash,
         ),
         'access_denied',
       );
@@ -417,12 +484,64 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
         'http://localhost:5173/mis-reservas',
       );
     });
+
+    it('rechaza el callback sin cookie de binding y no consume el state', async () => {
+      const { service, rows, sessions, events } = buildService();
+      const { state } = await startFlow(service);
+      const fetchMock = mockTokenEndpoint({ id_token: 'no-deberia-usarse' });
+
+      const redirect = await expectCallbackError(
+        service.handleCallback({ code: 'auth-code', state }, META),
+        'oauth_failed',
+      );
+
+      expect(`${redirect.origin}${redirect.pathname}`).toBe(
+        'http://localhost:5173/auth/callback',
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(sessions.createSession).not.toHaveBeenCalled();
+      expect((rows.at(-1) as OAuthStateRow).consumedAt).toBeNull();
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: AuthEventType.oauth_login_failed,
+          metadata: { provider: 'google', reason: 'state_binding_missing' },
+        }),
+      );
+    });
+
+    it('rechaza el callback con una cookie de binding distinta', async () => {
+      const { service, rows, sessions, events } = buildService();
+      const { state } = await startFlow(service);
+      const fetchMock = mockTokenEndpoint({ id_token: 'no-deberia-usarse' });
+
+      await expectCallbackError(
+        service.handleCallback(
+          { code: 'auth-code', state },
+          META,
+          sha256('otro-state'),
+        ),
+        'oauth_failed',
+      );
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(sessions.createSession).not.toHaveBeenCalled();
+      expect((rows.at(-1) as OAuthStateRow).consumedAt).toBeNull();
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: AuthEventType.oauth_login_failed,
+          metadata: { provider: 'google', reason: 'state_binding_mismatch' },
+        }),
+      );
+    });
   });
 
   describe('callback', () => {
     it('intercambia el code con PKCE, valida el ID token y no expone tokens en la URL', async () => {
       const { service, rows, users, sessions, events, user } = buildService();
-      const { state, nonce } = await startFlow(service, '/mis-reservas');
+      const { state, nonce, stateHash } = await startFlow(
+        service,
+        '/mis-reservas',
+      );
       const row = rows.at(-1) as OAuthStateRow;
       const fetchMock = mockTokenEndpoint({
         id_token: signIdToken(keys.privatePem, { nonce }),
@@ -432,6 +551,7 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
       const result = await service.handleCallback(
         { code: 'auth-code', state },
         META,
+        stateHash,
       );
 
       // El redirect solo contiene el resultado; los tokens van por cookie.
@@ -479,19 +599,29 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
       expect(row.consumedAt).toBeInstanceOf(Date);
     });
 
-    it('rechaza un nonce distinto', async () => {
-      const { service, sessions } = buildService();
-      const { state } = await startFlow(service);
+    it('rechaza un nonce distinto como oauth_failed, no como email_unverified', async () => {
+      const { service, sessions, events } = buildService();
+      const { state, stateHash } = await startFlow(service);
       mockTokenEndpoint({
         id_token: signIdToken(keys.privatePem, { nonce: 'nonce-ajeno' }),
       });
       mockJwks(service, keys.publicPem);
 
       await expectCallbackError(
-        service.handleCallback({ code: 'auth-code', state }, META),
-        'email_unverified',
+        service.handleCallback(
+          { code: 'auth-code', state },
+          META,
+          stateHash,
+        ),
+        'oauth_failed',
       );
       expect(sessions.createSession).not.toHaveBeenCalled();
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: AuthEventType.oauth_login_failed,
+          metadata: { provider: 'google', reason: 'invalid_nonce' },
+        }),
+      );
     });
 
     it('exige email_verified y acepta la variante string "true" de Google', async () => {
@@ -508,6 +638,7 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
         service.handleCallback(
           { code: 'auth-code', state: asString.state },
           META,
+          asString.stateHash,
         ),
       ).resolves.toMatchObject({
         redirectUrl: 'http://localhost:5173/auth/callback?oauth=success',
@@ -524,20 +655,21 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
         service.handleCallback(
           { code: 'auth-code', state: unverified.state },
           META,
+          unverified.stateHash,
         ),
         'email_unverified',
       );
     });
 
-    it('rechaza tokens sin nonce, sin sub o sin email', async () => {
-      const { service } = buildService();
-      const cases: Array<Record<string, unknown>> = [
-        { nonce: undefined },
-        { sub: undefined },
-        { email: undefined },
+    it('distingue nonce inválido de claims inválidos y de email no verificado', async () => {
+      const { service, events } = buildService();
+      const cases: Array<[Record<string, unknown>, string]> = [
+        [{ nonce: undefined }, 'invalid_nonce'],
+        [{ sub: undefined }, 'invalid_claims'],
+        [{ email: undefined }, 'invalid_claims'],
       ];
 
-      for (const overrides of cases) {
+      for (const [overrides, reason] of cases) {
         const flow = await startFlow(service);
         mockTokenEndpoint({
           id_token: signIdToken(keys.privatePem, {
@@ -550,8 +682,15 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
           service.handleCallback(
             { code: 'auth-code', state: flow.state },
             META,
+            flow.stateHash,
           ),
-          'email_unverified',
+          'oauth_failed',
+        );
+        expect(events.record).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            type: AuthEventType.oauth_login_failed,
+            metadata: { provider: 'google', reason },
+          }),
         );
       }
     });
@@ -570,6 +709,7 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
         service.handleCallback(
           { code: 'auth-code', state: badSignature.state },
           META,
+          badSignature.stateHash,
         ),
         'oauth_failed',
       );
@@ -583,6 +723,7 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
         service.handleCallback(
           { code: 'auth-code', state: hs256.state },
           META,
+          hs256.stateHash,
         ),
         'oauth_failed',
       );
@@ -599,6 +740,7 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
         service.handleCallback(
           { code: 'auth-code', state: unknownKid.state },
           META,
+          unknownKid.stateHash,
         ),
         'oauth_failed',
       );
@@ -630,6 +772,7 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
           service.handleCallback(
             { code: 'auth-code', state: flow.state },
             META,
+            flow.stateHash,
           ),
           'oauth_failed',
         );
@@ -651,6 +794,7 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
         service.handleCallback(
           { code: 'auth-code', state: flow.state },
           META,
+          flow.stateHash,
         ),
       ).resolves.toMatchObject({
         redirectUrl: 'http://localhost:5173/auth/callback?oauth=success',
@@ -671,6 +815,7 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
         service.handleCallback(
           { code: 'auth-code', state: flow.state },
           META,
+          flow.stateHash,
         ),
         'oauth_failed',
       );
@@ -688,6 +833,7 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
       await service.handleCallback(
         { code: 'auth-code', state: flow.state },
         META,
+        flow.stateHash,
       );
 
       expect(users.updateOAuthLogin).toHaveBeenCalledWith(
@@ -718,6 +864,7 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
         service.handleCallback(
           { code: 'auth-code', state: rejected.state },
           META,
+          rejected.stateHash,
         ),
         'oauth_failed',
       );
@@ -728,6 +875,7 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
         service.handleCallback(
           { code: 'auth-code', state: incomplete.state },
           META,
+          incomplete.stateHash,
         ),
         'oauth_failed',
       );
@@ -736,7 +884,13 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
       expect(events.record).toHaveBeenCalledWith(
         expect.objectContaining({
           type: AuthEventType.oauth_login_failed,
-          metadata: { provider: 'google', reason: 'oauth_failed' },
+          metadata: { provider: 'google', reason: 'token_exchange_failed' },
+        }),
+      );
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: AuthEventType.oauth_login_failed,
+          metadata: { provider: 'google', reason: 'invalid_response' },
         }),
       );
     });
@@ -752,6 +906,7 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
         service.handleCallback(
           { code: 'auth-code', state: flow.state },
           META,
+          flow.stateHash,
         ),
         'oauth_failed',
       );
@@ -773,6 +928,178 @@ describe('OAuthService (T1a: mock JWKS, sin red ni Google)', () => {
 
       expect(prisma.oAuthState.findUnique).not.toHaveBeenCalled();
       expect(prisma.oAuthState.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cookie httpOnly de binding (controller + AuthCookiesService)', () => {
+    function buildController() {
+      const config = {
+        env: { API_PREFIX: 'api/v1', COOKIE_DOMAIN: '' },
+        cookieSecure: true,
+        cookieSameSite: 'lax',
+      } as unknown as AppConfigService;
+      const oauth = {
+        buildAuthorizationUrl: jest.fn(),
+        handleCallback: jest.fn(),
+        redirectToError: jest.fn(
+          (reason: string) =>
+            `http://localhost:5173/auth/callback?oauth=error&reason=${reason}`,
+        ),
+      };
+      const cookies = new AuthCookiesService(config);
+      const controller = new AuthController(
+        {} as never,
+        {} as never,
+        oauth as never,
+        cookies,
+        { raw: { warn: jest.fn() } } as never,
+        config,
+      );
+      return { controller, oauth };
+    }
+
+    it('start setea una cookie httpOnly con el hash del state, Lax, Secure y 10 min', async () => {
+      const { controller, oauth } = buildController();
+      const res = fakeResponse();
+      const state = 'state-secreto-que-no-debe-salir';
+      const stateHash = sha256(state);
+      oauth.buildAuthorizationUrl.mockResolvedValue({
+        url: `https://accounts.google.com/o/oauth2/v2/auth?state=${state}`,
+        stateHash,
+      });
+
+      await controller.googleStart(
+        { return_to: '/auth/callback' },
+        res as unknown as ExpressResponse,
+      );
+
+      expect(oauth.buildAuthorizationUrl).toHaveBeenCalledWith('/auth/callback');
+      expect(res.cookie).toHaveBeenCalledWith(
+        OAUTH_STATE_COOKIE,
+        stateHash,
+        expect.objectContaining({
+          httpOnly: true,
+          secure: true,
+          sameSite: 'lax',
+          path: '/api/v1/auth/oauth/google',
+          maxAge: 10 * 60 * 1000,
+        }),
+      );
+      const cookieValue = res.cookie.mock.calls[0][1] as string;
+      expect(cookieValue).not.toBe(state);
+      expect(cookieValue).toBe(sha256(state));
+      expect(res.redirect).toHaveBeenCalledWith(
+        302,
+        expect.stringContaining('accounts.google.com'),
+      );
+    });
+
+    it('callback reenvía la cookie, crea la sesión y borra la cookie de binding', async () => {
+      const { controller, oauth } = buildController();
+      const res = fakeResponse();
+      const state = 'state-secreto';
+      const stateHash = sha256(state);
+      const req = fakeRequest({ [OAUTH_STATE_COOKIE]: stateHash });
+      oauth.handleCallback.mockResolvedValue({
+        redirectUrl: 'http://localhost:5173/auth/callback?oauth=success',
+        refreshToken: 'v1.test.refresh',
+        refreshExpiresAt: new Date(Date.now() + 60_000),
+        csrfToken: 'csrf-test',
+      });
+
+      await controller.googleCallback(
+        { code: 'auth-code', state },
+        req,
+        res as unknown as ExpressResponse,
+      );
+
+      expect(oauth.handleCallback).toHaveBeenCalledWith(
+        { code: 'auth-code', state, error: undefined },
+        expect.objectContaining({ requestId: 'req-oauth-http' }),
+        stateHash,
+      );
+      expect(res.cookie).toHaveBeenCalledWith(
+        'reservas_refresh',
+        'v1.test.refresh',
+        expect.objectContaining({ httpOnly: true }),
+      );
+      expect(res.clearCookie).toHaveBeenCalledWith(
+        OAUTH_STATE_COOKIE,
+        expect.objectContaining({
+          httpOnly: true,
+          secure: true,
+          sameSite: 'lax',
+          path: '/api/v1/auth/oauth/google',
+        }),
+      );
+      expect(res.clearCookie.mock.invocationCallOrder[0]).toBeLessThan(
+        res.redirect.mock.invocationCallOrder[0],
+      );
+      expect(res.redirect).toHaveBeenCalledWith(
+        302,
+        'http://localhost:5173/auth/callback?oauth=success',
+      );
+    });
+
+    it('callback sin cookie delega el fallo, no crea sesión y borra la cookie', async () => {
+      const { controller, oauth } = buildController();
+      const res = fakeResponse();
+      const req = fakeRequest();
+      const redirectUrl =
+        'http://localhost:5173/auth/callback?oauth=error&reason=oauth_failed';
+      oauth.handleCallback.mockRejectedValue(
+        new OAuthCallbackError(redirectUrl),
+      );
+
+      await controller.googleCallback(
+        { code: 'auth-code', state: 'state-secreto' },
+        req,
+        res as unknown as ExpressResponse,
+      );
+
+      expect(oauth.handleCallback).toHaveBeenCalledWith(
+        expect.objectContaining({ state: 'state-secreto' }),
+        expect.anything(),
+        undefined,
+      );
+      expect(res.cookie).not.toHaveBeenCalledWith(
+        'reservas_refresh',
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(res.clearCookie).toHaveBeenCalledWith(
+        OAUTH_STATE_COOKIE,
+        expect.objectContaining({ path: '/api/v1/auth/oauth/google' }),
+      );
+      expect(res.clearCookie.mock.invocationCallOrder[0]).toBeLessThan(
+        res.redirect.mock.invocationCallOrder[0],
+      );
+      expect(res.redirect).toHaveBeenCalledWith(302, redirectUrl);
+    });
+
+    it('callback con error inesperado también borra la cookie', async () => {
+      const { controller, oauth } = buildController();
+      const res = fakeResponse();
+      const req = fakeRequest({ [OAUTH_STATE_COOKIE]: sha256('state') });
+      oauth.handleCallback.mockRejectedValue(new Error('boom'));
+
+      await controller.googleCallback(
+        { code: 'auth-code', state: 'state' },
+        req,
+        res as unknown as ExpressResponse,
+      );
+
+      expect(res.clearCookie).toHaveBeenCalledWith(
+        OAUTH_STATE_COOKIE,
+        expect.objectContaining({ path: '/api/v1/auth/oauth/google' }),
+      );
+      expect(res.clearCookie.mock.invocationCallOrder[0]).toBeLessThan(
+        res.redirect.mock.invocationCallOrder[0],
+      );
+      expect(res.redirect).toHaveBeenCalledWith(
+        302,
+        'http://localhost:5173/auth/callback?oauth=error&reason=oauth_failed',
+      );
     });
   });
 });

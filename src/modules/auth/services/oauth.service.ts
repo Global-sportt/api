@@ -9,11 +9,13 @@ import { AppError } from '../../../common/errors/app-error';
 import {
   isRelativePath,
   randomToken,
+  safeEqual,
   sha256,
   sha256Base64Url,
 } from '../../../common/utils/crypto.util';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { UsersService } from '../../users/users.service';
+import { OAUTH_STATE_TTL_MS } from '../auth.constants';
 import { AuthEventsService } from './auth-events.service';
 import { SessionService } from './session.service';
 
@@ -24,7 +26,6 @@ const GOOGLE_ISSUERS: [string, ...string[]] = [
   'https://accounts.google.com',
   'accounts.google.com',
 ];
-const STATE_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_RETURN_TO = '/auth/callback';
 
 interface GoogleTokenResponse {
@@ -48,6 +49,12 @@ export interface OAuthCallbackInput {
   error?: string;
 }
 
+export interface OAuthAuthorizationRequest {
+  url: string;
+  /** SHA-256 del `state`; es lo único que se guarda en la cookie de binding. */
+  stateHash: string;
+}
+
 export interface OAuthCallbackSuccess {
   redirectUrl: string;
   refreshToken: string;
@@ -63,6 +70,24 @@ export type OAuthErrorReason =
   | 'account_suspended'
   | 'email_unverified'
   | 'oauth_not_configured';
+
+/**
+ * Motivo preciso para logs/eventos. El redirect al usuario sigue siendo
+ * genérico (`oauth_failed`) para no filtrar detalles de validación.
+ */
+export type OAuthFailureReason =
+  | 'invalid_nonce'
+  | 'invalid_claims'
+  | 'invalid_token'
+  | 'state_binding_missing'
+  | 'state_binding_mismatch'
+  | 'token_exchange_failed'
+  | 'oauth_unavailable'
+  | 'invalid_response'
+  | 'email_unverified'
+  | 'account_suspended'
+  | 'oauth_not_configured'
+  | 'oauth_failed';
 
 export class OAuthCallbackError extends Error {
   constructor(readonly redirectUrl: string) {
@@ -92,10 +117,13 @@ export class OAuthService {
     private readonly logger: AppLogger,
   ) {}
 
-  async buildAuthorizationUrl(returnToRaw?: string): Promise<string> {
+  async buildAuthorizationUrl(
+    returnToRaw?: string,
+  ): Promise<OAuthAuthorizationRequest> {
     const google = this.requireGoogleConfig();
     const returnTo = this.normalizeReturnTo(returnToRaw);
     const state = randomToken(32);
+    const stateHash = sha256(state);
     const nonce = randomToken(16);
     const codeVerifier = randomToken(48);
     const codeChallenge = sha256Base64Url(codeVerifier);
@@ -105,12 +133,12 @@ export class OAuthService {
     });
     await this.prisma.oAuthState.create({
       data: {
-        stateHash: sha256(state),
+        stateHash,
         provider: 'google',
         codeVerifier,
         nonce,
         returnTo,
-        expiresAt: new Date(Date.now() + STATE_TTL_MS),
+        expiresAt: new Date(Date.now() + OAUTH_STATE_TTL_MS),
       },
     });
 
@@ -127,14 +155,25 @@ export class OAuthService {
       prompt: 'select_account',
     }).toString();
 
-    return url.toString();
+    return { url: url.toString(), stateHash };
   }
 
   async handleCallback(
     input: OAuthCallbackInput,
     meta: RequestMetadata,
+    stateBindingHash?: string,
   ): Promise<OAuthCallbackSuccess> {
     const google = this.requireGoogleConfig();
+
+    try {
+      this.assertStateBinding(input.state, stateBindingHash);
+    } catch (error) {
+      await this.recordFailure(error, meta);
+      throw new OAuthCallbackError(
+        this.errorRedirect(DEFAULT_RETURN_TO, 'oauth_failed'),
+      );
+    }
+
     const state = await this.consumeState(input.state);
 
     if (input.error) {
@@ -180,25 +219,7 @@ export class OAuthService {
       };
     } catch (error) {
       if (error instanceof OAuthCallbackError) throw error;
-
-      const reason = this.toReason(error);
-      await this.events.record({
-        type: AuthEventType.oauth_login_failed,
-        requestId: meta.requestId,
-        ipHash: meta.ipHash,
-        userAgent: meta.userAgent,
-        metadata: { provider: 'google', reason },
-      });
-      this.logger.raw.warn(
-        {
-          event: 'oauth_callback_failed',
-          requestId: meta.requestId,
-          reason,
-          err: error,
-        },
-        'oauth_callback_failed',
-      );
-
+      const reason = await this.recordFailure(error, meta);
       throw new OAuthCallbackError(
         this.errorRedirect(state.returnTo, reason),
       );
@@ -207,6 +228,59 @@ export class OAuthService {
 
   redirectToError(reason: OAuthErrorReason): string {
     return this.errorRedirect(DEFAULT_RETURN_TO, reason);
+  }
+
+  /**
+   * El `state` debe coincidir con el hash guardado en la cookie httpOnly que
+   * el navegador recibió en /start. Sin cookie (o con otra) se falla cerrado
+   * antes de consumir el state, evitando login CSRF.
+   */
+  private assertStateBinding(
+    rawState: string | undefined,
+    bindingHash: string | undefined,
+  ): void {
+    if (!rawState || !bindingHash) {
+      throw new AppError(
+        401,
+        'OAUTH_STATE_BINDING_MISSING',
+        'No se pudo validar el inicio del flujo OAuth.',
+      );
+    }
+
+    if (!safeEqual(sha256(rawState), bindingHash)) {
+      throw new AppError(
+        401,
+        'OAUTH_STATE_BINDING_MISMATCH',
+        'No se pudo validar el inicio del flujo OAuth.',
+      );
+    }
+  }
+
+  private async recordFailure(
+    error: unknown,
+    meta: RequestMetadata,
+  ): Promise<OAuthErrorReason> {
+    const reason = this.toReason(error);
+    const detail = this.toFailureReason(error);
+
+    await this.events.record({
+      type: AuthEventType.oauth_login_failed,
+      requestId: meta.requestId,
+      ipHash: meta.ipHash,
+      userAgent: meta.userAgent,
+      metadata: { provider: 'google', reason: detail },
+    });
+    this.logger.raw.warn(
+      {
+        event: 'oauth_callback_failed',
+        requestId: meta.requestId,
+        reason: detail,
+        err: error,
+      },
+      'oauth_callback_failed',
+    );
+
+    return reason;
   }
 
   private async consumeState(
@@ -334,14 +408,30 @@ export class OAuthService {
       throw new AppError(401, 'OAUTH_INVALID_TOKEN', 'Token de Google inválido.');
     }
 
-    const emailVerified =
-      payload.email_verified === true || payload.email_verified === 'true';
+    // El nonce y los claims se validan por separado de email_verified para
+    // que la telemetría distinga replay/claims inválidos de correo no verificado.
+    if (payload.nonce !== expectedNonce) {
+      throw new AppError(
+        401,
+        'OAUTH_INVALID_NONCE',
+        'Token de Google inválido.',
+      );
+    }
+
     if (
       typeof payload.sub !== 'string' ||
-      typeof payload.email !== 'string' ||
-      !emailVerified ||
-      payload.nonce !== expectedNonce
+      typeof payload.email !== 'string'
     ) {
+      throw new AppError(
+        401,
+        'OAUTH_INVALID_CLAIMS',
+        'Token de Google inválido.',
+      );
+    }
+
+    const emailVerified =
+      payload.email_verified === true || payload.email_verified === 'true';
+    if (!emailVerified) {
       throw new AppError(
         401,
         'OAUTH_EMAIL_UNVERIFIED',
@@ -492,11 +582,43 @@ export class OAuthService {
     return url.toString();
   }
 
+  /** Motivo que ve el usuario: genérico para fallos internos de validación. */
   private toReason(error: unknown): OAuthErrorReason {
     if (error instanceof AppError) {
       if (error.code === 'OAUTH_EMAIL_UNVERIFIED') return 'email_unverified';
       if (error.code === 'ACCOUNT_SUSPENDED') return 'account_suspended';
       if (error.code === 'OAUTH_NOT_CONFIGURED') return 'oauth_not_configured';
+    }
+    return 'oauth_failed';
+  }
+
+  /** Motivo preciso solo para logs y auth_events. */
+  private toFailureReason(error: unknown): OAuthFailureReason {
+    if (error instanceof AppError) {
+      switch (error.code) {
+        case 'OAUTH_INVALID_NONCE':
+          return 'invalid_nonce';
+        case 'OAUTH_INVALID_CLAIMS':
+          return 'invalid_claims';
+        case 'OAUTH_INVALID_TOKEN':
+          return 'invalid_token';
+        case 'OAUTH_STATE_BINDING_MISSING':
+          return 'state_binding_missing';
+        case 'OAUTH_STATE_BINDING_MISMATCH':
+          return 'state_binding_mismatch';
+        case 'OAUTH_TOKEN_EXCHANGE_FAILED':
+          return 'token_exchange_failed';
+        case 'OAUTH_INVALID_RESPONSE':
+          return 'invalid_response';
+        case 'OAUTH_UNAVAILABLE':
+          return 'oauth_unavailable';
+        case 'OAUTH_EMAIL_UNVERIFIED':
+          return 'email_unverified';
+        case 'ACCOUNT_SUSPENDED':
+          return 'account_suspended';
+        case 'OAUTH_NOT_CONFIGURED':
+          return 'oauth_not_configured';
+      }
     }
     return 'oauth_failed';
   }

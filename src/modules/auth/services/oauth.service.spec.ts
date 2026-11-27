@@ -41,9 +41,8 @@ function buildService(googleConfigured = true) {
 describe('OAuthService', () => {
   it('construye la URL de Google con state, nonce y PKCE S256', async () => {
     const { service, prisma } = buildService();
-    const url = new URL(
-      await service.buildAuthorizationUrl('/auth/callback'),
-    );
+    const authorization = await service.buildAuthorizationUrl('/auth/callback');
+    const url = new URL(authorization.url);
 
     expect(`${url.origin}${url.pathname}`).toBe(
       'https://accounts.google.com/o/oauth2/v2/auth',
@@ -62,6 +61,8 @@ describe('OAuthService', () => {
     expect(created.provider).toBe('google');
     expect(created.returnTo).toBe('/auth/callback');
     expect(created.stateHash).toBe(sha256(state as string));
+    expect(authorization.stateHash).toBe(created.stateHash);
+    expect(authorization.stateHash).not.toBe(state);
     expect(created.codeVerifier).toHaveLength(64);
     expect(url.searchParams.get('code_challenge')).toBe(
       sha256Base64Url(created.codeVerifier),

@@ -293,7 +293,9 @@ export class AuthController {
     @Query() query: OAuthStartQueryDto,
     @Res() res: Response,
   ): Promise<void> {
-    const url = await this.oauth.buildAuthorizationUrl(query.return_to);
+    const { url, stateHash } =
+      await this.oauth.buildAuthorizationUrl(query.return_to);
+    this.cookies.setOAuthStateCookie(res, stateHash);
     res.redirect(302, url);
   }
 
@@ -313,6 +315,7 @@ export class AuthController {
   ): Promise<void> {
     const first = (value: string | string[] | undefined) =>
       typeof value === 'string' ? value : undefined;
+    let redirectUrl: string;
 
     try {
       const result = await this.oauth.handleCallback(
@@ -322,32 +325,39 @@ export class AuthController {
           error: first(query.error),
         },
         requestMetadata(req),
+        this.cookies.getOAuthStateCookie(req),
       );
       this.cookies.setSessionCookies(res, {
         refreshToken: result.refreshToken,
         refreshExpiresAt: result.refreshExpiresAt,
         csrfToken: result.csrfToken,
       });
-      res.redirect(302, result.redirectUrl);
+      redirectUrl = result.redirectUrl;
     } catch (error) {
       if (error instanceof OAuthCallbackError) {
-        res.redirect(302, error.redirectUrl);
-        return;
+        redirectUrl = error.redirectUrl;
+      } else if (
+        error instanceof AppError &&
+        error.code === 'OAUTH_NOT_CONFIGURED'
+      ) {
+        redirectUrl = this.oauth.redirectToError('oauth_not_configured');
+      } else {
+        this.logger.raw.warn(
+          {
+            event: 'oauth_callback_unhandled',
+            requestId: req.id,
+            err: error,
+          },
+          'oauth_callback_unhandled',
+        );
+        redirectUrl = this.oauth.redirectToError('oauth_failed');
       }
-      if (error instanceof AppError && error.code === 'OAUTH_NOT_CONFIGURED') {
-        res.redirect(302, this.oauth.redirectToError('oauth_not_configured'));
-        return;
-      }
-      this.logger.raw.warn(
-        {
-          event: 'oauth_callback_unhandled',
-          requestId: req.id,
-          err: error,
-        },
-        'oauth_callback_unhandled',
-      );
-      res.redirect(302, this.oauth.redirectToError('oauth_failed'));
     }
+
+    // Se borra antes del 302: tras res.redirect() la respuesta ya terminó y
+    // no se pueden agregar headers Set-Cookie.
+    this.cookies.clearOAuthStateCookie(res);
+    res.redirect(302, redirectUrl);
   }
 
   private respondWithSession(
