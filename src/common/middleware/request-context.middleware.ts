@@ -38,6 +38,8 @@ export class RequestContextMiddleware implements NestMiddleware {
             Math.round((performance.now() - req.startedAt) * 10) / 10,
           ipHash: req.ipHash,
           userId: req.principal?.userId,
+          authzDecision: req.authz?.decision,
+          cerbosCallId: req.authz?.cerbosCallId,
           userAgent: req.headers['user-agent']?.slice(0, 512),
         },
         'request',

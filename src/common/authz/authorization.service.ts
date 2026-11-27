@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type {
+  AuthorizationDecisionResult,
   AuthorizationService as AuthorizationServiceContract,
   AuthorizedPrincipal,
   QueryPlan,
@@ -25,12 +26,46 @@ export class CerbosAuthorizationService
     resourceKind: string,
     action: string,
     resource?: Record<string, unknown>,
+    requestId?: string,
   ): Promise<boolean> {
-    return this.cerbos.check(
-      this.toCerbosPrincipal(principal),
-      this.toCerbosResource(resourceKind, principal, resource),
-      action,
+    const cerbosPrincipal = this.toCerbosPrincipal(principal);
+    const cerbosResource = this.toCerbosResource(
+      resourceKind,
+      principal,
+      resource,
     );
+
+    return requestId
+      ? this.cerbos.check(cerbosPrincipal, cerbosResource, action, requestId)
+      : this.cerbos.check(cerbosPrincipal, cerbosResource, action);
+  }
+
+  /**
+   * Same PDP call as `can`, but keeps `cerbosCallId`/`requestId` for the
+   * guard's structured audit log. No decision is cached.
+   */
+  async decide(
+    principal: AuthorizedPrincipal,
+    resourceKind: string,
+    action: string,
+    resource?: Record<string, unknown>,
+    requestId?: string,
+  ): Promise<AuthorizationDecisionResult> {
+    const cerbosPrincipal = this.toCerbosPrincipal(principal);
+    const cerbosResource = this.toCerbosResource(
+      resourceKind,
+      principal,
+      resource,
+    );
+
+    return requestId
+      ? this.cerbos.checkDetails(
+          cerbosPrincipal,
+          cerbosResource,
+          action,
+          requestId,
+        )
+      : this.cerbos.checkDetails(cerbosPrincipal, cerbosResource, action);
   }
 
   async plan(

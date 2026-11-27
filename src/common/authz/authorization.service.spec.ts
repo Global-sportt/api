@@ -5,6 +5,7 @@ import type { CerbosClient } from './cerbos.client';
 
 interface FakeCerbosClient {
   check: jest.Mock;
+  checkDetails: jest.Mock;
   plan: jest.Mock;
 }
 
@@ -25,6 +26,7 @@ function setup(): {
 } {
   const cerbos: FakeCerbosClient = {
     check: jest.fn(),
+    checkDetails: jest.fn(),
     plan: jest.fn(),
   };
 
@@ -86,6 +88,36 @@ describe('CerbosAuthorizationService', () => {
         attr: {},
       },
       'read',
+    );
+  });
+
+  it('decide conserva cerbosCallId/requestId y envía el requestId de la API', async () => {
+    const { service, cerbos } = setup();
+    cerbos.checkDetails.mockResolvedValue({
+      allowed: true,
+      cerbosCallId: 'call-1',
+      requestId: 'req-1',
+    });
+
+    await expect(
+      service.decide(
+        principal,
+        'booking',
+        'read',
+        { id: 'booking-1', playerId: 'user-1' },
+        'req-1',
+      ),
+    ).resolves.toEqual({
+      allowed: true,
+      cerbosCallId: 'call-1',
+      requestId: 'req-1',
+    });
+
+    expect(cerbos.checkDetails).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      expect.objectContaining({ kind: 'booking', id: 'booking-1' }),
+      'read',
+      'req-1',
     );
   });
 

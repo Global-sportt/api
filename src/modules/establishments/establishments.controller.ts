@@ -18,6 +18,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
+import { AuthenticatedOnly } from '../../common/authz/authenticated-only.decorator';
 import { Authorize } from '../../common/authz/authorize.decorator';
 import { AuthorizationGuard } from '../../common/authz/authorization.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -74,6 +75,7 @@ export class MyEstablishmentsController {
    * the authenticated user.
    */
   @Get()
+  @AuthenticatedOnly()
   @ApiOperation({ summary: 'Listar mis establecimientos y mis membresías' })
   @ApiOkResponse({ description: 'Membresías del usuario autenticado' })
   listMine(@CurrentUser() user: AuthenticatedPrincipal) {

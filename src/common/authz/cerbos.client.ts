@@ -30,6 +30,17 @@ export interface CerbosCheckResourcesResponse {
   results?: Array<{
     actions?: Record<string, unknown>;
   }>;
+  /** Cerbos decision log correlation id. */
+  cerbosCallId?: string;
+  /** Echo of the request id sent to Cerbos. */
+  requestId?: string;
+}
+
+/** Boolean decision plus non-PII correlation metadata. */
+export interface CerbosCheckResult {
+  allowed: boolean;
+  cerbosCallId?: string;
+  requestId?: string;
 }
 
 /**
@@ -55,6 +66,9 @@ export interface CerbosTransport {
     },
     options?: { signal?: AbortSignal },
   ): Promise<QueryPlan>;
+
+  /** Readiness probe against `/_cerbos/health`. */
+  health(options?: { signal?: AbortSignal }): Promise<boolean>;
 }
 
 export interface CerbosClientOptions {
@@ -112,7 +126,30 @@ export class FetchCerbosTransport implements CerbosTransport {
       throw new Error('Malformed Cerbos checkResources result');
     }
 
-    return { results: [{ actions: result.actions }] };
+    return {
+      results: [{ actions: result.actions }],
+      ...(typeof body.cerbosCallId === 'string'
+        ? { cerbosCallId: body.cerbosCallId }
+        : {}),
+      ...(typeof body.requestId === 'string'
+        ? { requestId: body.requestId }
+        : {}),
+    };
+  }
+
+  async health(options?: { signal?: AbortSignal }): Promise<boolean> {
+    const fetchFn = this.fetchFn ?? globalThis.fetch;
+    if (typeof fetchFn !== 'function') {
+      throw new Error('Global fetch is not available');
+    }
+
+    const response = await fetchFn(`${this.baseUrl}/_cerbos/health`, {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+      signal: options?.signal,
+    });
+
+    return response.ok;
   }
 
   async planResources(
@@ -212,17 +249,20 @@ export class CerbosClient {
   }
 
   /**
-   * Single-resource check. Returns `false` only for an explicit Cerbos DENY;
-   * malformed responses and transport failures fail closed with a 503.
+   * Single-resource check with correlation metadata. Returns `allowed: false`
+   * only for an explicit Cerbos DENY; malformed responses and transport
+   * failures fail closed with a 503.
    */
-  async check(
+  async checkDetails(
     principal: CerbosPrincipal,
     resource: CerbosResource,
     action: string,
-  ): Promise<boolean> {
+    requestId?: string,
+  ): Promise<CerbosCheckResult> {
     const response = await this.execute((signal) =>
       this.transport.checkResources(
         {
+          ...(requestId ? { requestId } : {}),
           principal,
           resources: [{ resource, actions: [action] }],
         },
@@ -231,10 +271,45 @@ export class CerbosClient {
     );
 
     const effect = response?.results?.[0]?.actions?.[action];
-    if (effect === 'EFFECT_ALLOW') return true;
-    if (effect === 'EFFECT_DENY') return false;
+    if (effect !== 'EFFECT_ALLOW' && effect !== 'EFFECT_DENY') {
+      throw this.unavailable();
+    }
 
-    throw this.unavailable();
+    const correlatedRequestId = response.requestId ?? requestId;
+
+    return {
+      allowed: effect === 'EFFECT_ALLOW',
+      ...(response.cerbosCallId
+        ? { cerbosCallId: response.cerbosCallId }
+        : {}),
+      ...(correlatedRequestId ? { requestId: correlatedRequestId } : {}),
+    };
+  }
+
+  /** Boolean compatibility wrapper around `checkDetails`. */
+  async check(
+    principal: CerbosPrincipal,
+    resource: CerbosResource,
+    action: string,
+    requestId?: string,
+  ): Promise<boolean> {
+    const result = await this.checkDetails(
+      principal,
+      resource,
+      action,
+      requestId,
+    );
+
+    return result.allowed;
+  }
+
+  /** Cerbos readiness, without throwing or exposing transport internals. */
+  async isAvailable(): Promise<boolean> {
+    try {
+      return await this.execute((signal) => this.transport.health({ signal }));
+    } catch {
+      return false;
+    }
   }
 
   /** Query plan used by list endpoints (fed to `@cerbos/orm-prisma`). */

@@ -2,6 +2,8 @@ import type { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Public } from '../decorators/public.decorator';
 import { AppError } from '../errors/app-error';
+import type { AppLogger } from '../logging/app-logger.service';
+import { AuthenticatedOnly } from './authenticated-only.decorator';
 import { Authorize } from './authorize.decorator';
 import { AuthorizationGuard } from './authorization.guard';
 import type {
@@ -24,6 +26,11 @@ class BookingController {
 class PublicController {
   @Public()
   ping(): void {}
+}
+
+class AuthenticatedOnlyController {
+  @AuthenticatedOnly()
+  me(): void {}
 }
 
 class UnprotectedController {
@@ -60,6 +67,7 @@ const platformAdminPrincipal: AuthorizedPrincipal = {
 
 interface FakeAuthorizationService {
   can: jest.Mock;
+  decide?: jest.Mock;
   plan: jest.Mock;
 }
 
@@ -67,7 +75,9 @@ interface FakePermissionResolver {
   resolve: jest.Mock;
 }
 
-function setup(): {
+function setup(
+  logger?: AppLogger,
+): {
   guard: AuthorizationGuard;
   authorization: FakeAuthorizationService;
   permissions: FakePermissionResolver;
@@ -85,6 +95,7 @@ function setup(): {
       new Reflector(),
       authorization as unknown as AuthorizationService,
       permissions as unknown as PermissionResolver,
+      logger,
     ),
     authorization,
     permissions,
@@ -111,6 +122,8 @@ function authenticatedRequest(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
+    id: 'req-123',
+    originalUrl: '/bookings',
     principal: { userId: 'user-1', sessionId: 'session-1', role: 'player' },
     params: { establishmentId: 'E1', bookingId: 'booking-1' },
     tenant: { establishmentId: 'E1' },
@@ -148,11 +161,13 @@ describe('AuthorizationGuard', () => {
         establishmentId: 'E1',
         playerId: 'user-1',
       }),
+      'req-123',
     );
     expect(request.authz).toEqual({
       resource: 'booking',
       action: 'read',
       permission: 'booking:read',
+      decision: 'allow',
     });
   });
 
@@ -210,6 +225,137 @@ describe('AuthorizationGuard', () => {
 
     expect(permissions.resolve).not.toHaveBeenCalled();
     expect(authorization.can).not.toHaveBeenCalled();
+  });
+
+  it('permite una ruta @AuthenticatedOnly con principal sin llamar a Cerbos', async () => {
+    const { guard, authorization, permissions } = setup();
+
+    await expect(
+      guard.canActivate(
+        createContext(
+          AuthenticatedOnlyController.prototype.me,
+          AuthenticatedOnlyController,
+          authenticatedRequest({ tenant: undefined, params: {} }),
+        ),
+      ),
+    ).resolves.toBe(true);
+
+    expect(permissions.resolve).not.toHaveBeenCalled();
+    expect(authorization.can).not.toHaveBeenCalled();
+  });
+
+  it('exige autenticación en una ruta @AuthenticatedOnly sin principal', async () => {
+    const { guard, permissions } = setup();
+
+    const operation = guard.canActivate(
+      createContext(
+        AuthenticatedOnlyController.prototype.me,
+        AuthenticatedOnlyController,
+        { id: 'req-123', originalUrl: '/auth/me', params: {} },
+      ),
+    );
+
+    await expect(operation).rejects.toMatchObject({
+      code: 'UNAUTHENTICATED',
+      status: 401,
+    });
+    expect(permissions.resolve).not.toHaveBeenCalled();
+  });
+
+  it('adjunta cerbosCallId/requestId y registra la decisión estructurada', async () => {
+    const info = jest.fn();
+    const logger = { raw: { info } } as unknown as AppLogger;
+    const { guard, authorization, permissions } = setup(logger);
+    permissions.resolve.mockResolvedValue(playerPrincipal);
+    authorization.decide = jest.fn().mockResolvedValue({
+      allowed: true,
+      cerbosCallId: 'call-1',
+      requestId: 'req-123',
+    });
+
+    const request = authenticatedRequest({
+      principal: { userId: 'user_a', sessionId: 'session-a' },
+      tenant: undefined,
+      params: {},
+      path: '/bookings',
+    });
+
+    await expect(
+      guard.canActivate(
+        createContext(
+          BookingController.prototype.create,
+          BookingController,
+          request,
+        ),
+      ),
+    ).resolves.toBe(true);
+
+    expect(authorization.decide).toHaveBeenCalledWith(
+      playerPrincipal,
+      'booking',
+      'create',
+      { playerId: 'user_a' },
+      'req-123',
+    );
+    expect(request.authz).toEqual({
+      resource: 'booking',
+      action: 'create',
+      permission: 'booking:create',
+      decision: 'allow',
+      cerbosCallId: 'call-1',
+      requestId: 'req-123',
+    });
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'authorization.decision',
+        requestId: 'req-123',
+        actorId: 'user_a',
+        route: '/bookings',
+        permission: 'booking:create',
+        decision: 'allow',
+        cerbosCallId: 'call-1',
+        cerbosRequestId: 'req-123',
+      }),
+      'authorization_decision',
+    );
+  });
+
+  it('registra y adjunta la correlación también en un DENY', async () => {
+    const info = jest.fn();
+    const logger = { raw: { info } } as unknown as AppLogger;
+    const { guard, authorization, permissions } = setup(logger);
+    permissions.resolve.mockResolvedValue(authorizedPrincipal);
+    authorization.decide = jest.fn().mockResolvedValue({
+      allowed: false,
+      cerbosCallId: 'call-deny',
+    });
+
+    const request = authenticatedRequest();
+
+    await expect(
+      guard.canActivate(
+        createContext(
+          BookingController.prototype.read,
+          BookingController,
+          request,
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: 'PERMISSION_DENIED',
+      status: 403,
+    });
+
+    expect(request.authz).toMatchObject({
+      decision: 'deny',
+      cerbosCallId: 'call-deny',
+    });
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: 'deny',
+        cerbosCallId: 'call-deny',
+      }),
+      'authorization_decision',
+    );
   });
 
   it('exige autenticación cuando hay metadata pero no principal', async () => {
@@ -306,6 +452,7 @@ describe('AuthorizationGuard', () => {
         id: 'booking-1',
         establishmentId: 'E1',
       }),
+      'req-123',
     );
   });
 
@@ -336,6 +483,7 @@ describe('AuthorizationGuard', () => {
       'booking',
       'cancel',
       { id: 'booking-1', playerId: 'user_a' },
+      'req-123',
     );
   });
 
@@ -366,6 +514,7 @@ describe('AuthorizationGuard', () => {
       'booking',
       'create',
       { playerId: 'user_a' },
+      'req-123',
     );
   });
 
@@ -396,6 +545,7 @@ describe('AuthorizationGuard', () => {
       'booking',
       'read',
       { playerId: 'admin-1' },
+      'req-123',
     );
   });
 
@@ -453,6 +603,7 @@ describe('AuthorizationGuard', () => {
       'booking',
       'cancel',
       { id: 'booking-1', playerId: 'user_explicit' },
+      'req-123',
     );
   });
 });

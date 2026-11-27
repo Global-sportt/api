@@ -24,6 +24,7 @@ function setup(timeoutMs = 50): {
   const transport = {
     checkResources: jest.fn(),
     planResources: jest.fn(),
+    health: jest.fn(),
   } as jest.Mocked<CerbosTransport>;
 
   return {
@@ -75,6 +76,46 @@ describe('CerbosClient with an injected transport', () => {
       },
       { signal: expect.any(AbortSignal) },
     );
+  });
+
+  it('conserva cerbosCallId y requestId en checkDetails', async () => {
+    const { client, transport } = setup();
+    transport.checkResources.mockResolvedValue({
+      results: [{ actions: { read: 'EFFECT_ALLOW' } }],
+      cerbosCallId: 'call-1',
+      requestId: 'req-1',
+    });
+
+    await expect(
+      client.checkDetails(principal, resource, 'read', 'req-api-1'),
+    ).resolves.toEqual({
+      allowed: true,
+      cerbosCallId: 'call-1',
+      requestId: 'req-1',
+    });
+
+    expect(transport.checkResources).toHaveBeenCalledWith(
+      {
+        requestId: 'req-api-1',
+        principal,
+        resources: [{ resource, actions: ['read'] }],
+      },
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
+  it('usa el requestId enviado cuando el PDP no lo devuelve', async () => {
+    const { client, transport } = setup();
+    transport.checkResources.mockResolvedValue({
+      results: [{ actions: { read: 'EFFECT_DENY' } }],
+    });
+
+    await expect(
+      client.checkDetails(principal, resource, 'read', 'req-api-2'),
+    ).resolves.toEqual({
+      allowed: false,
+      requestId: 'req-api-2',
+    });
   });
 
   it('devuelve deny para EFFECT_DENY', async () => {
@@ -137,6 +178,33 @@ describe('CerbosClient with an injected transport', () => {
       },
       { signal: expect.any(AbortSignal) },
     );
+  });
+
+  it('isAvailable devuelve true cuando el health del PDP responde', async () => {
+    const { client, transport } = setup();
+    transport.health.mockResolvedValue(true);
+
+    await expect(client.isAvailable()).resolves.toBe(true);
+    expect(transport.health).toHaveBeenCalledWith({
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it('isAvailable devuelve false cuando el PDP no está sano', async () => {
+    const { client, transport } = setup();
+    transport.health.mockResolvedValue(false);
+
+    await expect(client.isAvailable()).resolves.toBe(false);
+  });
+
+  it('isAvailable devuelve false ante error o timeout sin propagar detalles', async () => {
+    const { client, transport } = setup(10);
+    transport.health.mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+    await expect(client.isAvailable()).resolves.toBe(false);
+
+    transport.health.mockImplementation(() => new Promise(() => {}));
+    await expect(client.isAvailable()).resolves.toBe(false);
   });
 
   it('mapea un plan con kind desconocido a AUTHORIZATION_UNAVAILABLE', async () => {
@@ -260,6 +328,17 @@ describe('FetchCerbosTransport (native fetch)', () => {
     fetchSpy.mockImplementation(() => new Promise(() => {}));
 
     await authorizationUnavailable(client.check(principal, resource, 'read'));
+  });
+
+  it('consulta /_cerbos/health con GET', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse({ status: 'SERVING' }));
+
+    await expect(client.isAvailable()).resolves.toBe(true);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'http://cerbos.test/_cerbos/health',
+      expect.objectContaining({ method: 'GET' }),
+    );
   });
 
   it('mapea filter CONDITIONAL a kind/condition y conserva metadata', async () => {
