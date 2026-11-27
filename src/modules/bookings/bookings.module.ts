@@ -8,6 +8,7 @@ import { SpacesModule } from '../spaces/spaces.module';
 import { BookingsExpiryService } from './bookings-expiry.service';
 import {
   BookingsController,
+  EstablishmentAgendaController,
   EstablishmentBookingsController,
   MyBookingsController,
 } from './bookings.controller';
@@ -19,6 +20,7 @@ import { BookingsService } from './bookings.service';
     BookingsController,
     MyBookingsController,
     EstablishmentBookingsController,
+    EstablishmentAgendaController,
   ],
   providers: [
     BookingsService,
