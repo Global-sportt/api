@@ -1,14 +1,42 @@
 import { Module } from '@nestjs/common';
+import { AUTHORIZATION_SERVICE, AUTHZ_PERMISSION_RESOLVER } from './authorization.types';
+import { CerbosAuthorizationService } from './authorization.service';
+import { CerbosClient } from './cerbos.client';
 import { PermissionResolver } from './permission-resolver.service';
 
 /**
- * Base de autorización (permisos efectivos por tenant).
+ * Base de autorización.
  *
- * Aún no se importa en AppModule: A0 integrará este módulo junto con el guard
- * de autorización y el cliente Cerbos de A2b.
+ * Provee:
+ * - `PermissionResolver`: permisos efectivos por usuario/tenant.
+ * - `CerbosClient`: transporte HTTP al PDP local.
+ * - `AUTHORIZATION_SERVICE`: fachada que usa el guard.
+ * - `AUTHZ_PERMISSION_RESOLVER`: token que consumen los guards.
+ *
+ * Los módulos de dominio importan este módulo y usan `@UseGuards` por
+ * controlador; el guard no se registra globalmente para no romper rutas de
+ * autenticación que solo requieren sesión.
  */
 @Module({
-  providers: [PermissionResolver],
-  exports: [PermissionResolver],
+  providers: [
+    PermissionResolver,
+    CerbosClient,
+    CerbosAuthorizationService,
+    {
+      provide: AUTHORIZATION_SERVICE,
+      useExisting: CerbosAuthorizationService,
+    },
+    {
+      provide: AUTHZ_PERMISSION_RESOLVER,
+      useExisting: PermissionResolver,
+    },
+  ],
+  exports: [
+    PermissionResolver,
+    CerbosClient,
+    CerbosAuthorizationService,
+    AUTHORIZATION_SERVICE,
+    AUTHZ_PERMISSION_RESOLVER,
+  ],
 })
 export class AuthzModule {}
