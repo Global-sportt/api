@@ -1,11 +1,13 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
-import { createRequire } from 'node:module';
+import { randomUUID } from 'node:crypto';
 import { AppError } from '../errors/app-error';
 import type { QueryPlan } from './authorization.types';
 import { PLAN_KIND } from './authorization.types';
 
 const DEFAULT_CERBOS_URL = 'http://127.0.0.1:3592';
 const DEFAULT_TIMEOUT_MS = 200;
+const CHECK_RESOURCES_PATH = '/api/check/resources';
+const PLAN_RESOURCES_PATH = '/api/plan/resources';
 
 /** JSON-serializable attributes only; no PII is added by this layer. */
 export interface CerbosPrincipal {
@@ -20,20 +22,24 @@ export interface CerbosResource {
   attr?: Record<string, unknown>;
 }
 
+/**
+ * Raw Cerbos check response. Effects are interpreted by `CerbosClient` so any
+ * unknown/missing decision can fail closed with a 503.
+ */
 export interface CerbosCheckResourcesResponse {
   results?: Array<{
-    isAllowed(action: string): boolean | undefined;
+    actions?: Record<string, unknown>;
   }>;
 }
 
 /**
- * Subset of the `@cerbos/http` client used by this adapter. Keeping the
- * interface local avoids importing the ESM-only SDK into this CommonJS build
- * (the project's tsconfig uses `moduleResolution: node10`).
+ * Subset of the Cerbos HTTP API used by this adapter. The production
+ * implementation uses native `fetch` (Node 22); tests inject a fake.
  */
 export interface CerbosTransport {
   checkResources(
     request: {
+      requestId?: string;
       principal: CerbosPrincipal;
       resources: Array<{ resource: CerbosResource; actions: string[] }>;
     },
@@ -42,6 +48,7 @@ export interface CerbosTransport {
 
   planResources(
     request: {
+      requestId?: string;
       principal: CerbosPrincipal;
       resource: { kind: string };
       action: string;
@@ -53,19 +60,146 @@ export interface CerbosTransport {
 export interface CerbosClientOptions {
   url?: string;
   timeoutMs?: number;
-  /** Test seam; production loads `@cerbos/http` lazily. */
+  /** Test seam; production uses `FetchCerbosTransport`. */
   transport?: CerbosTransport;
 }
 
 export const CERBOS_CLIENT_OPTIONS = Symbol('CERBOS_CLIENT_OPTIONS');
 
-const requireModule = createRequire(__filename);
+type FetchLike = typeof fetch;
+
+/**
+ * Native `fetch` transport for the Cerbos REST API.
+ *
+ * The `@cerbos/http` SDK is ESM-only and cannot be loaded from this CommonJS
+ * runtime with `require`, so the adapter talks to the documented HTTP
+ * endpoints directly.
+ */
+export class FetchCerbosTransport implements CerbosTransport {
+  private readonly baseUrl: string;
+
+  constructor(
+    baseUrl: string,
+    private readonly fetchFn?: FetchLike,
+  ) {
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+  }
+
+  async checkResources(
+    request: {
+      requestId?: string;
+      principal: CerbosPrincipal;
+      resources: Array<{ resource: CerbosResource; actions: string[] }>;
+    },
+    options?: { signal?: AbortSignal },
+  ): Promise<CerbosCheckResourcesResponse> {
+    const body = await this.post(
+      CHECK_RESOURCES_PATH,
+      {
+        requestId: request.requestId ?? randomUUID(),
+        principal: request.principal,
+        resources: request.resources,
+      },
+      options,
+    );
+
+    if (!isRecord(body) || !Array.isArray(body.results)) {
+      throw new Error('Malformed Cerbos checkResources response');
+    }
+
+    const result = body.results[0];
+    if (!isRecord(result) || !isRecord(result.actions)) {
+      throw new Error('Malformed Cerbos checkResources result');
+    }
+
+    return { results: [{ actions: result.actions }] };
+  }
+
+  async planResources(
+    request: {
+      requestId?: string;
+      principal: CerbosPrincipal;
+      resource: { kind: string };
+      action: string;
+    },
+    options?: { signal?: AbortSignal },
+  ): Promise<QueryPlan> {
+    const body = await this.post(
+      PLAN_RESOURCES_PATH,
+      {
+        requestId: request.requestId ?? randomUUID(),
+        principal: request.principal,
+        resource: { kind: request.resource.kind },
+        action: request.action,
+      },
+      options,
+    );
+
+    if (!isRecord(body) || !isRecord(body.filter)) {
+      throw new Error('Malformed Cerbos planResources response');
+    }
+
+    const filter = body.filter;
+    const kind = filter.kind;
+    if (!isPlanKind(kind)) {
+      throw new Error('Unknown Cerbos plan kind');
+    }
+
+    const metadata = {
+      ...(typeof body.cerbosCallId === 'string'
+        ? { cerbosCallId: body.cerbosCallId }
+        : {}),
+      ...(typeof body.requestId === 'string'
+        ? { requestId: body.requestId }
+        : {}),
+    };
+
+    if (kind === PLAN_KIND.CONDITIONAL) {
+      if (filter.condition === undefined || filter.condition === null) {
+        throw new Error('Conditional Cerbos plan without condition');
+      }
+
+      return { kind, condition: filter.condition, ...metadata };
+    }
+
+    return { kind, ...metadata };
+  }
+
+  private async post(
+    path: string,
+    payload: unknown,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown> {
+    const fetchFn = this.fetchFn ?? globalThis.fetch;
+    if (typeof fetchFn !== 'function') {
+      throw new Error('Global fetch is not available');
+    }
+
+    const response = await fetchFn(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: options?.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Cerbos request to ${path} failed with status ${response.status}`,
+      );
+    }
+
+    return response.json();
+  }
+}
 
 @Injectable()
 export class CerbosClient {
   private readonly url: string;
   private readonly timeoutMs: number;
-  private transport?: CerbosTransport;
+  private readonly transport: CerbosTransport;
 
   constructor(
     @Optional()
@@ -74,7 +208,7 @@ export class CerbosClient {
   ) {
     this.url = options.url ?? process.env.CERBOS_URL ?? DEFAULT_CERBOS_URL;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.transport = options.transport;
+    this.transport = options.transport ?? new FetchCerbosTransport(this.url);
   }
 
   /**
@@ -87,7 +221,7 @@ export class CerbosClient {
     action: string,
   ): Promise<boolean> {
     const response = await this.execute((signal) =>
-      this.getTransport().checkResources(
+      this.transport.checkResources(
         {
           principal,
           resources: [{ resource, actions: [action] }],
@@ -96,17 +230,11 @@ export class CerbosClient {
       ),
     );
 
-    const result = response?.results?.[0];
-    if (!result) {
-      throw this.unavailable();
-    }
+    const effect = response?.results?.[0]?.actions?.[action];
+    if (effect === 'EFFECT_ALLOW') return true;
+    if (effect === 'EFFECT_DENY') return false;
 
-    const allowed = result.isAllowed(action);
-    if (allowed === undefined) {
-      throw this.unavailable();
-    }
-
-    return allowed;
+    throw this.unavailable();
   }
 
   /** Query plan used by list endpoints (fed to `@cerbos/orm-prisma`). */
@@ -116,7 +244,7 @@ export class CerbosClient {
     action: string,
   ): Promise<QueryPlan> {
     const plan = await this.execute((signal) =>
-      this.getTransport().planResources(
+      this.transport.planResources(
         {
           principal,
           resource: { kind: resourceKind },
@@ -135,27 +263,6 @@ export class CerbosClient {
     }
 
     return plan;
-  }
-
-  private getTransport(): CerbosTransport {
-    if (this.transport) return this.transport;
-
-    try {
-      const module = requireModule('@cerbos/http') as {
-        HTTP?: new (url: string) => CerbosTransport;
-      };
-
-      if (typeof module.HTTP !== 'function') {
-        throw new Error('@cerbos/http does not export HTTP');
-      }
-
-      this.transport = new module.HTTP(this.url);
-      return this.transport;
-    } catch {
-      // Do not cache the failure: a later call may succeed after the runtime
-      // or configuration is fixed.
-      throw this.unavailable();
-    }
   }
 
   private async execute<T>(
@@ -196,4 +303,8 @@ function isPlanKind(value: unknown): value is QueryPlan['kind'] {
     value === PLAN_KIND.ALWAYS_DENIED ||
     value === PLAN_KIND.CONDITIONAL
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
