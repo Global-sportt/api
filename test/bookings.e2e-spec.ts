@@ -1,6 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { BookingStatus, GroupScope, SpaceStatus } from '@prisma/client';
+import { BookingStatus, EstablishmentStatus, GroupScope, SpaceStatus } from '@prisma/client';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { AppModule } from '../src/app.module';
@@ -384,9 +384,11 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
   let playerB: TestUser;
   let e1: EstablishmentBody;
   let e2: EstablishmentBody;
+  let e3: EstablishmentBody;
   let s1: string;
   let s2: string;
   let s3: string;
+  let s4: string;
   let inactiveSpace: string;
 
   const day1 = localDate(1);
@@ -435,12 +437,19 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
       `e2e-booking-sur-${Date.now()}`,
       owner2.userId,
     );
+    e3 = await createEstablishment(
+      admin.token,
+      'E2E Booking Estado',
+      `e2e-booking-estado-${Date.now()}`,
+      owner1.userId,
+    );
 
     await addStaff(owner1.token, e1.id, staff1.userId);
 
     s1 = await createSpace(e1.id, `s1-${Date.now()}`, 'Cancha 1');
     s2 = await createSpace(e2.id, `s2-${Date.now()}`, 'Cancha Sur');
     s3 = await createSpace(e1.id, `s3-${Date.now()}`, 'Cancha 3');
+    s4 = await createSpace(e3.id, `s4-${Date.now()}`, 'Cancha Estado');
 
     const inactive = await prisma.space.create({
       data: {
@@ -509,6 +518,90 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
     expect(forgedPrice.body.code).toBe('VALIDATION_ERROR');
   });
 
+  it('F-01: rechaza reservas pasadas propias y tenant con 400 VALIDATION_ERROR', async () => {
+    const own = await createOwnBooking(
+      playerA.token,
+      s1,
+      slotAt(pastDay, 10),
+    ).expect(400);
+    expect(own.body.code).toBe('VALIDATION_ERROR');
+    expect(own.body.details).toEqual([
+      { field: 'startsAt', constraints: ['isFuture'] },
+    ]);
+
+    const tenant = await createTenantBooking(
+      staff1.token,
+      e1.id,
+      s1,
+      playerB.userId,
+      slotAt(pastDay, 11),
+    ).expect(400);
+    expect(tenant.body.code).toBe('VALIDATION_ERROR');
+    expect(tenant.body.details).toEqual([
+      { field: 'startsAt', constraints: ['isFuture'] },
+    ]);
+
+    expect(
+      await prisma.booking.count({
+        where: {
+          spaceId: s1,
+          startsAt: {
+            gte: new Date(slotAt(pastDay, 0).startsAt),
+            lt: new Date(slotAt(pastDay, 23).endsAt),
+          },
+        },
+      }),
+    ).toBe(0);
+  });
+
+  it('F-02: rechaza reservas propias y tenant en sedes pending/suspended', async () => {
+    // Baseline: the same establishment accepts a booking while active.
+    const activeBooking = await createOwnBooking(
+      playerA.token,
+      s4,
+      slotAt(day3, 15),
+    ).expect(201);
+    expect(activeBooking.body.establishmentId).toBe(e3.id);
+
+    await prisma.establishment.update({
+      where: { id: e3.id },
+      data: { status: EstablishmentStatus.suspended },
+    });
+
+    const ownSuspended = await createOwnBooking(
+      playerA.token,
+      s4,
+      slotAt(day3, 16),
+    ).expect(404);
+    expect(ownSuspended.body.code).toBe('ESTABLISHMENT_NOT_FOUND');
+
+    const tenantSuspended = await createTenantBooking(
+      owner1.token,
+      e3.id,
+      s4,
+      playerB.userId,
+      slotAt(day3, 17),
+    ).expect(404);
+    expect(tenantSuspended.body.code).toBe('ESTABLISHMENT_NOT_FOUND');
+
+    await prisma.establishment.update({
+      where: { id: e3.id },
+      data: { status: EstablishmentStatus.pending },
+    });
+
+    const ownPending = await createOwnBooking(
+      playerA.token,
+      s4,
+      slotAt(day3, 18),
+    ).expect(404);
+    expect(ownPending.body.code).toBe('ESTABLISHMENT_NOT_FOUND');
+
+    // Only the baseline booking exists: the rejected attempts never inserted.
+    expect(
+      await prisma.booking.count({ where: { establishmentId: e3.id } }),
+    ).toBe(1);
+  });
+
   it('aísla /me por jugador: B no ve ni lee ni cancela la reserva de A', async () => {
     const ownA = await prisma.booking.findFirstOrThrow({
       where: { spaceId: s1, playerId: playerA.userId, startsAt: new Date(slotAt(day1, 9).startsAt) },
@@ -560,6 +653,96 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
       request(server()).get(`/api/v1/me/bookings/${bookingBId}`),
       playerB.token,
     ).expect(200);
+  });
+
+  it('F-06: /me detail y cancelación autorizan sobre la reserva real (reserva ajena 404)', async () => {
+    const created = await createOwnBooking(
+      playerB.token,
+      s1,
+      slotAt(day3, 12),
+    ).expect(201);
+    const bookingId = created.body.id as string;
+
+    const authorization = app.get<AuthorizationService>(AUTHORIZATION_SERVICE);
+    const canSpy = jest.spyOn(authorization, 'can');
+
+    try {
+      const readForeign = await bearer(
+        request(server()).get(`/api/v1/me/bookings/${bookingId}`),
+        playerA.token,
+      ).expect(404);
+      expect(readForeign.body.code).toBe('BOOKING_NOT_FOUND');
+
+      const cancelForeign = await bearer(
+        request(server()).post(`/api/v1/me/bookings/${bookingId}/cancel`),
+        playerA.token,
+      ).expect(404);
+      expect(cancelForeign.body.code).toBe('BOOKING_NOT_FOUND');
+
+      const unchanged = await prisma.booking.findUnique({
+        where: { id: bookingId },
+      });
+      expect(unchanged?.status).toBe(BookingStatus.confirmed);
+
+      // The service-level check must use the real booking owner, not the
+      // synthetic playerId the guard injects for `/me`.
+      const realCalls = canSpy.mock.calls.filter(([, , , resource]) => {
+        return (
+          resource?.id === bookingId &&
+          resource?.playerId === playerB.userId
+        );
+      });
+      const readCallIndex = canSpy.mock.calls.findIndex(
+        ([, , action, resource]) =>
+          action === 'read' &&
+          resource?.id === bookingId &&
+          resource?.playerId === playerB.userId,
+      );
+      expect(readCallIndex).toBeGreaterThanOrEqual(0);
+      expect(await canSpy.mock.results[readCallIndex].value).toBe(false);
+
+      expect(realCalls.find(([, , action]) => action === 'read')?.[3]).toEqual(
+        expect.objectContaining({
+          id: bookingId,
+          playerId: playerB.userId,
+          establishmentId: e1.id,
+          status: BookingStatus.confirmed,
+          startsAt: created.body.startsAt,
+          endsAt: created.body.endsAt,
+        }),
+      );
+
+      const cancelCallIndex = canSpy.mock.calls.findIndex(
+        ([, , action, resource]) =>
+          action === 'cancel' &&
+          resource?.id === bookingId &&
+          resource?.playerId === playerB.userId,
+      );
+      expect(cancelCallIndex).toBeGreaterThanOrEqual(0);
+      expect(await canSpy.mock.results[cancelCallIndex].value).toBe(false);
+      expect(
+        realCalls.find(([, , action]) => action === 'cancel')?.[3],
+      ).toEqual(
+        expect.objectContaining({
+          id: bookingId,
+          playerId: playerB.userId,
+          establishmentId: e1.id,
+          status: BookingStatus.confirmed,
+        }),
+      );
+
+      // The guard still evaluated its own (synthetic) resource before the
+      // service re-evaluated the real one: both layers ran.
+      const guardCalls = canSpy.mock.calls.filter(([, , , resource]) => {
+        return (
+          resource?.id === bookingId &&
+          resource?.playerId === playerA.userId
+        );
+      });
+      expect(guardCalls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      canSpy.mockRestore();
+    }
   });
 
   it('BKG-05: staff/owner de E1 opera en E1; owner de E2 recibe 403 T y el espacio cruzado 404', async () => {
@@ -971,9 +1154,35 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
     ).expect(409);
     expect(secondCancel.body.code).toBe('INVALID_STATE');
 
-    const past = await createOwnBooking(playerA.token, s1, slotAt(pastDay, 10)).expect(201);
+    // F-01: the public API must reject a past slot...
+    const pastSlot = slotAt(pastDay, 10);
+    const pastRejected = await createOwnBooking(
+      playerA.token,
+      s1,
+      pastSlot,
+    ).expect(400);
+    expect(pastRejected.body.code).toBe('VALIDATION_ERROR');
+    expect(pastRejected.body.details).toEqual([
+      { field: 'startsAt', constraints: ['isFuture'] },
+    ]);
+
+    // ...so the cancellation-window scenario is seeded directly in the DB.
+    const past = await prisma.booking.create({
+      data: {
+        publicCode: `BKPAST${Date.now()}`,
+        establishmentId: e1.id,
+        spaceId: s1,
+        playerId: playerA.userId,
+        createdByUserId: playerA.userId,
+        startsAt: new Date(pastSlot.startsAt),
+        endsAt: new Date(pastSlot.endsAt),
+        status: BookingStatus.confirmed,
+        totalMinor: 25_000n,
+        currency: 'COP',
+      },
+    });
     const closed = await bearer(
-      request(server()).post(`/api/v1/me/bookings/${past.body.id as string}/cancel`),
+      request(server()).post(`/api/v1/me/bookings/${past.id}/cancel`),
       playerA.token,
     ).expect(409);
     expect(closed.body.code).toBe('CANCELLATION_WINDOW_CLOSED');
