@@ -354,6 +354,7 @@ model Space {
   sport           String?
   slotMinutes     Int         @default(60) @map("slot_minutes")
   bufferMinutes   Int         @default(0) @map("buffer_minutes")
+  basePriceMinor  BigInt?     @map("base_price_minor")
   status          SpaceStatus @default(active)
   createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
