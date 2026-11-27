@@ -24,6 +24,7 @@ import type {
 import { AppError } from '../../common/errors/app-error';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { SlotsService } from '../spaces/slots.service';
+import type { BookingNotificationsService } from './booking-notifications.service';
 import {
   BOOKING_START_TOLERANCE_MS,
   BookingsService,
@@ -76,6 +77,7 @@ interface ServiceMocks {
   slots: { generate: jest.Mock };
   permissions: { resolve: jest.Mock };
   authorization: { can: jest.Mock; plan: jest.Mock };
+  notifications: { notifyCreated: jest.Mock; notifyCancelled: jest.Mock };
 }
 
 function buildService(): ServiceMocks {
@@ -96,6 +98,10 @@ function buildService(): ServiceMocks {
   const permissions = { resolve: jest.fn() };
   const authorization = { can: jest.fn(), plan: jest.fn() };
   const logger = { raw: { info: jest.fn() }, error: jest.fn() };
+  const notifications = {
+    notifyCreated: jest.fn().mockResolvedValue(undefined),
+    notifyCancelled: jest.fn().mockResolvedValue(undefined),
+  };
 
   return {
     service: new BookingsService(
@@ -104,11 +110,13 @@ function buildService(): ServiceMocks {
       permissions as unknown as PermissionResolver,
       authorization as unknown as AuthorizationService,
       logger as unknown as AppLogger,
+      notifications as unknown as BookingNotificationsService,
     ),
     prisma,
     slots,
     permissions,
     authorization,
+    notifications,
   };
 }
 
