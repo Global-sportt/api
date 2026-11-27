@@ -2,6 +2,7 @@ import { Controller, Get } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { Public } from '../../common/decorators/public.decorator';
+import { CerbosClient } from '../../common/authz/cerbos.client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppError } from '../../common/errors/app-error';
 
@@ -9,7 +10,10 @@ import { AppError } from '../../common/errors/app-error';
 @SkipThrottle()
 @Controller('health')
 export class HealthController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cerbos: CerbosClient,
+  ) {}
 
   @Public()
   @Get('live')
@@ -21,12 +25,25 @@ export class HealthController {
     };
   }
 
+  /**
+   * Readiness only reports aggregate component status (no URLs, policy
+   * details or transport errors). Cerbos is fail-closed for private routes,
+   * so an instance without a reachable PDP must not be marked ready.
+   */
   @Public()
   @Get('ready')
-  async ready(): Promise<{ status: string; database: string; timestamp: string }> {
-    try {
-      await this.prisma.$queryRaw`SELECT 1`;
-    } catch {
+  async ready(): Promise<{
+    status: string;
+    database: string;
+    cerbos: string;
+    timestamp: string;
+  }> {
+    const [database, cerbos] = await Promise.all([
+      this.isDatabaseReady(),
+      this.cerbos.isAvailable(),
+    ]);
+
+    if (!database) {
       throw new AppError(
         503,
         'DATABASE_UNAVAILABLE',
@@ -34,10 +51,28 @@ export class HealthController {
       );
     }
 
+    if (!cerbos) {
+      throw new AppError(
+        503,
+        'AUTHORIZATION_UNAVAILABLE',
+        'El servicio de autorización no está disponible.',
+      );
+    }
+
     return {
       status: 'ok',
       database: 'ok',
+      cerbos: 'ok',
       timestamp: new Date().toISOString(),
     };
+  }
+
+  private async isDatabaseReady(): Promise<boolean> {
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

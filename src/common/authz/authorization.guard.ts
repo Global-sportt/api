@@ -3,11 +3,14 @@ import {
   ExecutionContext,
   Inject,
   Injectable,
+  Optional,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { AppError } from '../errors/app-error';
+import { AppLogger } from '../logging/app-logger.service';
+import { AUTHENTICATED_ONLY_METADATA_KEY } from './authenticated-only.decorator';
 import {
   AUTHORIZE_METADATA_KEY,
   AuthorizeMetadata,
@@ -16,7 +19,9 @@ import {
   AUTHORIZATION_SERVICE,
   AUTHZ_PERMISSION_RESOLVER,
   AuthorizationDecision,
+  AuthorizationDecisionResult,
   AuthorizationService,
+  AuthorizedPrincipal,
   PermissionResolver,
 } from './authorization.types';
 
@@ -28,7 +33,7 @@ import {
 interface AuthorizationState {
   /** Set by the tenant layer when the route resolves an establishment. */
   tenant?: unknown;
-  /** Decision metadata attached after a successful check. */
+  /** Decision metadata attached before/after the check. */
   authz?: AuthorizationDecision;
   /**
    * Optional attribute bag supplied by a handler/interceptor when the resource
@@ -46,9 +51,14 @@ export class AuthorizationGuard implements CanActivate {
     private readonly authorization: AuthorizationService,
     @Inject(AUTHZ_PERMISSION_RESOLVER)
     private readonly permissions: PermissionResolver,
+    @Optional()
+    private readonly logger?: AppLogger,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest<Request>();
+    const state = request as unknown as AuthorizationState;
+
     const metadata = this.reflector.getAllAndOverride<AuthorizeMetadata>(
       AUTHORIZE_METADATA_KEY,
       [context.getHandler(), context.getClass()],
@@ -62,15 +72,29 @@ export class AuthorizationGuard implements CanActivate {
 
       if (isPublic) return true;
 
+      const isAuthenticatedOnly = this.reflector.getAllAndOverride<boolean>(
+        AUTHENTICATED_ONLY_METADATA_KEY,
+        [context.getHandler(), context.getClass()],
+      );
+
+      if (isAuthenticatedOnly) {
+        if (!request.principal) {
+          throw new AppError(
+            401,
+            'UNAUTHENTICATED',
+            'Se requiere autenticación para acceder a este recurso.',
+          );
+        }
+
+        return true;
+      }
+
       throw new AppError(
         403,
         'PERMISSION_DENIED',
         'No tienes permisos para realizar esta acción.',
       );
     }
-
-    const request = context.switchToHttp().getRequest<Request>();
-    const state = request as unknown as AuthorizationState;
 
     const authenticated = request.principal;
     if (!authenticated) {
@@ -91,10 +115,9 @@ export class AuthorizationGuard implements CanActivate {
       establishmentId,
     );
 
-    const allowed = await this.authorization.can(
+    const decision = await this.decide(
       principal,
-      metadata.resourceKind,
-      metadata.action,
+      metadata,
       buildResource(
         request,
         state.authorizationResource,
@@ -102,9 +125,13 @@ export class AuthorizationGuard implements CanActivate {
         establishmentId,
         authenticated.userId,
       ),
+      request.id,
     );
 
-    if (!allowed) {
+    state.authz = decision;
+    this.logDecision(request, decision, establishmentId);
+
+    if (decision.decision === 'deny') {
       throw new AppError(
         403,
         'PERMISSION_DENIED',
@@ -112,13 +139,86 @@ export class AuthorizationGuard implements CanActivate {
       );
     }
 
-    state.authz = {
+    return true;
+  }
+
+  private async decide(
+    principal: AuthorizedPrincipal,
+    metadata: AuthorizeMetadata,
+    resource: Record<string, unknown> | undefined,
+    requestId: string | undefined,
+  ): Promise<AuthorizationDecision> {
+    const result = await this.runDecision(
+      principal,
+      metadata,
+      resource,
+      requestId,
+    );
+
+    return {
       resource: metadata.resourceKind,
       action: metadata.action,
       permission: metadata.permission,
+      decision: result.allowed ? 'allow' : 'deny',
+      ...(result.cerbosCallId
+        ? { cerbosCallId: result.cerbosCallId }
+        : {}),
+      ...(result.requestId ? { requestId: result.requestId } : {}),
     };
+  }
 
-    return true;
+  private async runDecision(
+    principal: AuthorizedPrincipal,
+    metadata: AuthorizeMetadata,
+    resource: Record<string, unknown> | undefined,
+    requestId: string | undefined,
+  ): Promise<AuthorizationDecisionResult> {
+    if (typeof this.authorization.decide === 'function') {
+      return this.authorization.decide(
+        principal,
+        metadata.resourceKind,
+        metadata.action,
+        resource,
+        requestId,
+      );
+    }
+
+    // Test doubles that only implement the original boolean contract still
+    // work; they simply cannot contribute a `cerbosCallId`.
+    return {
+      allowed: await this.authorization.can(
+        principal,
+        metadata.resourceKind,
+        metadata.action,
+        resource,
+        requestId,
+      ),
+    };
+  }
+
+  private logDecision(
+    request: Request,
+    decision: AuthorizationDecision,
+    establishmentId: string | undefined,
+  ): void {
+    if (!this.logger) return;
+
+    this.logger.raw.info(
+      {
+        event: 'authorization.decision',
+        requestId: request.id,
+        actorId: request.principal?.userId,
+        establishmentId: establishmentId ?? null,
+        route: (request.originalUrl ?? request.path ?? '').split('?')[0],
+        resource: decision.resource,
+        action: decision.action,
+        permission: decision.permission,
+        decision: decision.decision,
+        cerbosCallId: decision.cerbosCallId ?? null,
+        cerbosRequestId: decision.requestId ?? null,
+      },
+      'authorization_decision',
+    );
   }
 }
 
