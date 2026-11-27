@@ -93,8 +93,8 @@ model User {
   authEvents         AuthEvent[]
   memberships        Membership[]
   globalGroups       UserGlobalGroup[]
-  bookingsAsPlayer   Booking[]             @relation("BookingPlayer")
-  bookingsCreated    Booking[]             @relation("BookingCreatedBy")
+  bookingsAsPlayer   Booking[]           @relation("BookingPlayer")
+  bookingsCreated    Booking[]           @relation("BookingCreatedBy")
 
   @@index([status])
   @@map("users")
@@ -240,6 +240,11 @@ model SecurityGroup {
   name            String
   scope           GroupScope
   isSystem        Boolean    @default(false) @map("is_system")
+  // Identificador estable e inmutable de los grupos de sistema. No usar
+  // `slug` para decisiones de autorización: el slug es editable. Los valores
+  // válidos y su correspondencia con `scope` los fija el check
+  // `security_groups_system_key_check` (migración authz_system_key_guards).
+  systemKey       String?    @map("system_key")
   createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -248,6 +253,11 @@ model SecurityGroup {
   userGlobalGroups UserGlobalGroup[]
   membershipGroups MembershipGroup[]
 
+  // Prisma no puede expresar índices parciales. En PostgreSQL la unicidad
+  // real son dos índices parciales creados a mano (global por slug y tenant
+  // por establishment_id+slug); este @@unique se mantiene para el cliente
+  // Prisma y NO debe usarse para generar migraciones sin revisar el SQL.
+  // Ver docs/adr/ADR-016-db-constraints-manual-sql.md.
   @@unique([establishmentId, slug])
   @@unique([id, scope])
   @@unique([id, establishmentId])
@@ -352,7 +362,8 @@ model Space {
   operatingHours OperatingHour[]
   exceptions     ScheduleException[]
   priceRules     PriceRule[]
-  bookings       Booking[]
+  bookings       Booking[]           @relation("BookingSpace")
+  bookingsTenant Booking[]           @relation("BookingSpaceTenant")
 
   @@unique([establishmentId, slug])
   // Composite key used by bookings FK (space_id, establishment_id): a space
@@ -425,7 +436,11 @@ model Booking {
   updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   establishment Establishment @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
-  space         Space         @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  // FK simple histórica (Prisma) y FK compuesta de aislamiento multi-sede
+  // modelada aparte para que `prisma migrate diff` no la elimine. Ambas
+  // existen en la migración 20261127020000_bookings.
+  space         Space         @relation("BookingSpace", fields: [spaceId], references: [id], onDelete: Cascade)
+  spaceTenant   Space         @relation("BookingSpaceTenant", fields: [spaceId, establishmentId], references: [id, establishmentId], onDelete: Cascade)
   player        User          @relation("BookingPlayer", fields: [playerId], references: [id], onDelete: Cascade)
   createdBy     User          @relation("BookingCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
 

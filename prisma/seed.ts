@@ -10,6 +10,8 @@ import {
   PLATFORM_ADMIN_GROUP_SLUG,
   PLAYER_GRANT_CODES,
   PLAYER_GROUP_SLUG,
+  SYSTEM_KEY_PLATFORM_ADMIN,
+  SYSTEM_KEY_PLAYER,
 } from '../src/common/authz/permissions';
 
 const prisma = new PrismaClient();
@@ -48,19 +50,29 @@ async function seedPermissions(): Promise<PermissionIds> {
 async function upsertGlobalGroup(
   slug: string,
   name: string,
+  systemKey: string,
 ): Promise<{ id: string }> {
-  const existing = await prisma.securityGroup.findFirst({
-    where: { establishmentId: null, slug },
-    select: { id: true },
-  });
+  // El marcador estable manda; el slug solo se usa para adoptar una fila
+  // creada por una versión anterior del seed.
+  const existing =
+    (await prisma.securityGroup.findFirst({
+      where: { establishmentId: null, systemKey },
+      select: { id: true },
+    })) ??
+    (await prisma.securityGroup.findFirst({
+      where: { establishmentId: null, slug },
+      select: { id: true },
+    }));
 
   if (existing) {
     return prisma.securityGroup.update({
       where: { id: existing.id },
       data: {
+        slug,
         name,
         scope: GroupScope.global,
         isSystem: true,
+        systemKey,
       },
       select: { id: true },
     });
@@ -72,6 +84,7 @@ async function upsertGlobalGroup(
       name,
       scope: GroupScope.global,
       isSystem: true,
+      systemKey,
     },
     select: { id: true },
   });
@@ -107,10 +120,15 @@ async function seedAuthorization(): Promise<{
 }> {
   const permissionIds = await seedPermissions();
 
-  const player = await upsertGlobalGroup(PLAYER_GROUP_SLUG, 'Jugador');
+  const player = await upsertGlobalGroup(
+    PLAYER_GROUP_SLUG,
+    'Jugador',
+    SYSTEM_KEY_PLAYER,
+  );
   const platformAdmin = await upsertGlobalGroup(
     PLATFORM_ADMIN_GROUP_SLUG,
     'Administrador de plataforma',
+    SYSTEM_KEY_PLATFORM_ADMIN,
   );
 
   await grantPermissions(
