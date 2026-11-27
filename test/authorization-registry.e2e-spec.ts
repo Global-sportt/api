@@ -64,6 +64,36 @@ describe('Authorization route registry (e2e)', () => {
       'authorize',
       'space:update',
     );
+    expectRoute(
+      byRoute,
+      'GET /establishments/:establishmentId/spaces/:spaceId/operating-hours',
+      'authorize',
+      'schedule:read',
+    );
+    expectRoute(
+      byRoute,
+      'PUT /establishments/:establishmentId/spaces/:spaceId/operating-hours',
+      'authorize',
+      'schedule:manage',
+    );
+    expectRoute(
+      byRoute,
+      'GET /establishments/:establishmentId/spaces/:spaceId/schedule-exceptions',
+      'authorize',
+      'schedule:read',
+    );
+    expectRoute(
+      byRoute,
+      'PUT /establishments/:establishmentId/spaces/:spaceId/schedule-exceptions/:date',
+      'authorize',
+      'schedule:manage',
+    );
+    expectRoute(
+      byRoute,
+      'DELETE /establishments/:establishmentId/spaces/:spaceId/schedule-exceptions/:date',
+      'authorize',
+      'schedule:manage',
+    );
     expectRoute(byRoute, 'GET /health/ready', 'public');
   });
 });
