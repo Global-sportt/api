@@ -1,0 +1,40 @@
+---
+apiVersion: "api.cerbos.dev/v1"
+resourcePolicy:
+  version: "default"
+  resource: "membership"
+  rules:
+    - actions: ["read"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "membership:read" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["membership:read"] == "platform" ||
+              (
+                request.principal.attr.permissions["membership:read"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              )
+            )
+    - actions: ["manage"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "membership:manage" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["membership:manage"] == "platform" ||
+              (
+                request.principal.attr.permissions["membership:manage"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              )
+            )

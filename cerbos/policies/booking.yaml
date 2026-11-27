@@ -14,8 +14,76 @@ resourcePolicy:
             "booking:read" in request.principal.attr.permissions &&
             (
               request.principal.attr.permissions["booking:read"] == "platform" ||
-              (request.principal.attr.permissions["booking:read"] == "establishment" &&
-               request.principal.attr.establishmentId == request.resource.attr.establishmentId) ||
-              (request.principal.attr.permissions["booking:read"] == "own" &&
-               request.principal.id == request.resource.attr.playerId)
+              (
+                request.principal.attr.permissions["booking:read"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              ) ||
+              (
+                request.principal.attr.permissions["booking:read"] == "own" &&
+                has(request.resource.attr.playerId) &&
+                request.principal.id == request.resource.attr.playerId
+              )
+            )
+    - actions: ["create"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "booking:create" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["booking:create"] == "platform" ||
+              (
+                request.principal.attr.permissions["booking:create"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              ) ||
+              (
+                request.principal.attr.permissions["booking:create"] == "own" &&
+                has(request.resource.attr.playerId) &&
+                request.principal.id == request.resource.attr.playerId
+              )
+            )
+    - actions: ["cancel"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "booking:cancel" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["booking:cancel"] == "platform" ||
+              (
+                request.principal.attr.permissions["booking:cancel"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              ) ||
+              (
+                request.principal.attr.permissions["booking:cancel"] == "own" &&
+                has(request.resource.attr.playerId) &&
+                request.principal.id == request.resource.attr.playerId
+              )
+            )
+    - actions: ["manage"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "booking:manage" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["booking:manage"] == "platform" ||
+              (
+                request.principal.attr.permissions["booking:manage"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              )
             )

@@ -1,0 +1,140 @@
+---
+name: "ReportSuite"
+description: "report:read — permission map + scope"
+principals:
+  owner_e1:
+    id: "user_owner_e1"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        report:read: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  owner_e2:
+    id: "user_owner_e2"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        report:read: "establishment"
+      establishmentId: "E2"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  staff_e1:
+    id: "user_staff_e1"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        report:read: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  platform_admin:
+    id: "user_admin"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        report:read: "platform"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: true
+  player_a:
+    id: "user_a"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        booking:read: "own"
+      isPlatformAdmin: false
+  no_permissions:
+    id: "user_no_permissions"
+    roles: ["authenticated"]
+    attr:
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  anonymous:
+    id: "anonymous"
+    roles: ["anonymous"]
+    attr: {}
+resources:
+  report_e1:
+    id: "R_E1"
+    kind: "report"
+    attr:
+      establishmentId: "E1"
+  report_e2:
+    id: "R_E2"
+    kind: "report"
+    attr:
+      establishmentId: "E2"
+tests:
+  - name: "owner E1 can read report E1"
+    input:
+      principals: ["owner_e1"]
+      resources: ["report_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "owner_e1"
+        resource: "report_e1"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "owner E1 cannot read report E2"
+    input:
+      principals: ["owner_e1"]
+      resources: ["report_e2"]
+      actions: ["read"]
+    expected:
+      - principal: "owner_e1"
+        resource: "report_e2"
+        actions:
+          read: EFFECT_DENY
+  - name: "staff E1 can read report E1"
+    input:
+      principals: ["staff_e1"]
+      resources: ["report_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "staff_e1"
+        resource: "report_e1"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "platform admin can read any report"
+    input:
+      principals: ["platform_admin"]
+      resources: ["report_e2"]
+      actions: ["read"]
+    expected:
+      - principal: "platform_admin"
+        resource: "report_e2"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "player without report permission is denied"
+    input:
+      principals: ["player_a"]
+      resources: ["report_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "player_a"
+        resource: "report_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "authenticated principal without the permission map is denied"
+    input:
+      principals: ["no_permissions"]
+      resources: ["report_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "no_permissions"
+        resource: "report_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "anonymous is denied"
+    input:
+      principals: ["anonymous"]
+      resources: ["report_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "anonymous"
+        resource: "report_e1"
+        actions:
+          read: EFFECT_DENY

@@ -1,6 +1,6 @@
 ---
-name: "EstablishmentReadSuite"
-description: "establishment:read — permission map + scope (establishment / platform)"
+name: "EstablishmentSuite"
+description: "establishment read/create/update/suspend — permission map + scope"
 principals:
   owner_e1:
     id: "user_owner_e1"
@@ -8,6 +8,7 @@ principals:
     attr:
       permissions:
         establishment:read: "establishment"
+        establishment:update: "establishment"
       establishmentId: "E1"
       membershipStatus: "active"
       isPlatformAdmin: false
@@ -17,6 +18,7 @@ principals:
     attr:
       permissions:
         establishment:read: "establishment"
+        establishment:update: "establishment"
       establishmentId: "E2"
       membershipStatus: "active"
       isPlatformAdmin: false
@@ -35,24 +37,37 @@ principals:
     attr:
       permissions:
         establishment:read: "platform"
+        establishment:create: "platform"
+        establishment:update: "platform"
+        establishment:suspend: "platform"
       establishmentId: "E1"
       membershipStatus: "active"
       isPlatformAdmin: true
+  wrong_scope_create:
+    id: "user_wrong_scope_create"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        establishment:read: "own"
+        establishment:create: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  wrong_scope_suspend:
+    id: "user_wrong_scope_suspend"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        establishment:suspend: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
   player_a:
     id: "user_a"
     roles: ["authenticated"]
     attr:
       permissions:
         booking:read: "own"
-      isPlatformAdmin: false
-  wrong_scope:
-    id: "user_wrong_scope"
-    roles: ["authenticated"]
-    attr:
-      permissions:
-        establishment:read: "own"
-      establishmentId: "E1"
-      membershipStatus: "active"
       isPlatformAdmin: false
   no_permissions:
     id: "user_no_permissions"
@@ -84,6 +99,10 @@ resources:
     kind: "establishment"
     attr:
       establishmentId: "E2"
+  establishment_new:
+    id: "E_NEW"
+    kind: "establishment"
+    attr: {}
   establishment_no_tenant:
     id: "E0"
     kind: "establishment"
@@ -151,11 +170,11 @@ tests:
           read: EFFECT_DENY
   - name: "own scope is not valid for establishment reads"
     input:
-      principals: ["wrong_scope"]
+      principals: ["wrong_scope_create"]
       resources: ["establishment_e1"]
       actions: ["read"]
     expected:
-      - principal: "wrong_scope"
+      - principal: "wrong_scope_create"
         resource: "establishment_e1"
         actions:
           read: EFFECT_DENY
@@ -189,3 +208,83 @@ tests:
         resource: "establishment_e1"
         actions:
           read: EFFECT_DENY
+  - name: "platform admin can create an establishment without resource tenant"
+    input:
+      principals: ["platform_admin"]
+      resources: ["establishment_new"]
+      actions: ["create"]
+    expected:
+      - principal: "platform_admin"
+        resource: "establishment_new"
+        actions:
+          create: EFFECT_ALLOW
+  - name: "owner cannot create an establishment"
+    input:
+      principals: ["owner_e1"]
+      resources: ["establishment_new"]
+      actions: ["create"]
+    expected:
+      - principal: "owner_e1"
+        resource: "establishment_new"
+        actions:
+          create: EFFECT_DENY
+  - name: "establishment scope cannot create an establishment"
+    input:
+      principals: ["wrong_scope_create"]
+      resources: ["establishment_new"]
+      actions: ["create"]
+    expected:
+      - principal: "wrong_scope_create"
+        resource: "establishment_new"
+        actions:
+          create: EFFECT_DENY
+  - name: "owner E1 can update establishment E1"
+    input:
+      principals: ["owner_e1"]
+      resources: ["establishment_e1"]
+      actions: ["update"]
+    expected:
+      - principal: "owner_e1"
+        resource: "establishment_e1"
+        actions:
+          update: EFFECT_ALLOW
+  - name: "owner E1 cannot update establishment E2"
+    input:
+      principals: ["owner_e1"]
+      resources: ["establishment_e2"]
+      actions: ["update"]
+    expected:
+      - principal: "owner_e1"
+        resource: "establishment_e2"
+        actions:
+          update: EFFECT_DENY
+  - name: "platform admin can update without resource tenant"
+    input:
+      principals: ["platform_admin"]
+      resources: ["establishment_new"]
+      actions: ["update"]
+    expected:
+      - principal: "platform_admin"
+        resource: "establishment_new"
+        actions:
+          update: EFFECT_ALLOW
+  - name: "platform admin can suspend any establishment"
+    input:
+      principals: ["platform_admin"]
+      resources: ["establishment_e2"]
+      actions: ["suspend"]
+    expected:
+      - principal: "platform_admin"
+        resource: "establishment_e2"
+        actions:
+          suspend: EFFECT_ALLOW
+  - name: "establishment scope cannot suspend"
+    input:
+      principals: ["wrong_scope_suspend"]
+      resources: ["establishment_e1"]
+      actions: ["suspend"]
+    expected:
+      - principal: "wrong_scope_suspend"
+        resource: "establishment_e1"
+        actions:
+          suspend: EFFECT_DENY

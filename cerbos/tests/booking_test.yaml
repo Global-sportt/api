@@ -1,6 +1,6 @@
 ---
 name: "BookingSuite"
-description: "booking:read — permission map + scope (own / establishment / platform)"
+description: "booking read/create/cancel/manage — permission map + scope"
 principals:
   player_a:
     id: "user_a"
@@ -8,18 +8,25 @@ principals:
     attr:
       permissions:
         booking:read: "own"
+        booking:create: "own"
+        booking:cancel: "own"
   player_b:
     id: "user_b"
     roles: ["authenticated"]
     attr:
       permissions:
         booking:read: "own"
+        booking:create: "own"
+        booking:cancel: "own"
   staff_e1:
     id: "user_staff_e1"
     roles: ["authenticated"]
     attr:
       permissions:
         booking:read: "establishment"
+        booking:create: "establishment"
+        booking:cancel: "establishment"
+        booking:manage: "establishment"
       establishmentId: "E1"
       membershipStatus: "active"
       isPlatformAdmin: false
@@ -36,6 +43,9 @@ principals:
     attr:
       permissions:
         booking:read: "platform"
+        booking:create: "platform"
+        booking:cancel: "platform"
+        booking:manage: "platform"
       establishmentId: "E1"
       membershipStatus: "active"
       isPlatformAdmin: true
@@ -58,6 +68,18 @@ resources:
       establishmentId: "E1"
   booking_b_e2:
     id: "booking_b_e2"
+    kind: "booking"
+    attr:
+      playerId: "user_b"
+      establishmentId: "E2"
+  booking_new_a:
+    id: "booking_new_a"
+    kind: "booking"
+    attr:
+      playerId: "user_a"
+      establishmentId: "E1"
+  booking_new_b:
+    id: "booking_new_b"
     kind: "booking"
     attr:
       playerId: "user_b"
@@ -141,3 +163,123 @@ tests:
         resource: "booking_a_e1"
         actions:
           read: EFFECT_DENY
+  - name: "player A can create own booking"
+    input:
+      principals: ["player_a"]
+      resources: ["booking_new_a"]
+      actions: ["create"]
+    expected:
+      - principal: "player_a"
+        resource: "booking_new_a"
+        actions:
+          create: EFFECT_ALLOW
+  - name: "player A cannot create a booking for player B"
+    input:
+      principals: ["player_a"]
+      resources: ["booking_new_b"]
+      actions: ["create"]
+    expected:
+      - principal: "player_a"
+        resource: "booking_new_b"
+        actions:
+          create: EFFECT_DENY
+  - name: "staff E1 can create a booking in E1"
+    input:
+      principals: ["staff_e1"]
+      resources: ["booking_new_a"]
+      actions: ["create"]
+    expected:
+      - principal: "staff_e1"
+        resource: "booking_new_a"
+        actions:
+          create: EFFECT_ALLOW
+  - name: "staff E1 cannot create a booking in E2"
+    input:
+      principals: ["staff_e1"]
+      resources: ["booking_new_b"]
+      actions: ["create"]
+    expected:
+      - principal: "staff_e1"
+        resource: "booking_new_b"
+        actions:
+          create: EFFECT_DENY
+  - name: "player A can cancel own booking"
+    input:
+      principals: ["player_a"]
+      resources: ["booking_a_e1"]
+      actions: ["cancel"]
+    expected:
+      - principal: "player_a"
+        resource: "booking_a_e1"
+        actions:
+          cancel: EFFECT_ALLOW
+  - name: "player A cannot cancel player B booking"
+    input:
+      principals: ["player_a"]
+      resources: ["booking_b_e1"]
+      actions: ["cancel"]
+    expected:
+      - principal: "player_a"
+        resource: "booking_b_e1"
+        actions:
+          cancel: EFFECT_DENY
+  - name: "staff E1 can cancel any booking in E1"
+    input:
+      principals: ["staff_e1"]
+      resources: ["booking_b_e1"]
+      actions: ["cancel"]
+    expected:
+      - principal: "staff_e1"
+        resource: "booking_b_e1"
+        actions:
+          cancel: EFFECT_ALLOW
+  - name: "staff E1 can manage any booking in E1"
+    input:
+      principals: ["staff_e1"]
+      resources: ["booking_b_e1"]
+      actions: ["manage"]
+    expected:
+      - principal: "staff_e1"
+        resource: "booking_b_e1"
+        actions:
+          manage: EFFECT_ALLOW
+  - name: "player A cannot manage bookings"
+    input:
+      principals: ["player_a"]
+      resources: ["booking_a_e1"]
+      actions: ["manage"]
+    expected:
+      - principal: "player_a"
+        resource: "booking_a_e1"
+        actions:
+          manage: EFFECT_DENY
+  - name: "staff E1 cannot manage a booking in E2"
+    input:
+      principals: ["staff_e1"]
+      resources: ["booking_b_e2"]
+      actions: ["manage"]
+    expected:
+      - principal: "staff_e1"
+        resource: "booking_b_e2"
+        actions:
+          manage: EFFECT_DENY
+  - name: "platform admin can manage any booking"
+    input:
+      principals: ["platform_admin"]
+      resources: ["booking_b_e2"]
+      actions: ["manage"]
+    expected:
+      - principal: "platform_admin"
+        resource: "booking_b_e2"
+        actions:
+          manage: EFFECT_ALLOW
+  - name: "authenticated principal without the permission map cannot manage"
+    input:
+      principals: ["staff_e1_no_permissions"]
+      resources: ["booking_b_e1"]
+      actions: ["manage"]
+    expected:
+      - principal: "staff_e1_no_permissions"
+        resource: "booking_b_e1"
+        actions:
+          manage: EFFECT_DENY

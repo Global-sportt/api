@@ -1,0 +1,23 @@
+---
+apiVersion: "api.cerbos.dev/v1"
+resourcePolicy:
+  version: "default"
+  resource: "day"
+  rules:
+    - actions: ["close"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "day:close" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["day:close"] == "platform" ||
+              (
+                request.principal.attr.permissions["day:close"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              )
+            )

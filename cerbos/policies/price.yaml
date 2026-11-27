@@ -1,0 +1,40 @@
+---
+apiVersion: "api.cerbos.dev/v1"
+resourcePolicy:
+  version: "default"
+  resource: "price"
+  rules:
+    - actions: ["read"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "price:read" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["price:read"] == "platform" ||
+              (
+                request.principal.attr.permissions["price:read"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              )
+            )
+    - actions: ["manage"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "price:manage" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["price:manage"] == "platform" ||
+              (
+                request.principal.attr.permissions["price:manage"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              )
+            )

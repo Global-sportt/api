@@ -1,0 +1,140 @@
+---
+name: "DaySuite"
+description: "day:close — permission map + scope"
+principals:
+  owner_e1:
+    id: "user_owner_e1"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        day:close: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  owner_e2:
+    id: "user_owner_e2"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        day:close: "establishment"
+      establishmentId: "E2"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  staff_e1:
+    id: "user_staff_e1"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        day:close: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  platform_admin:
+    id: "user_admin"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        day:close: "platform"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: true
+  player_a:
+    id: "user_a"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        booking:read: "own"
+      isPlatformAdmin: false
+  no_permissions:
+    id: "user_no_permissions"
+    roles: ["authenticated"]
+    attr:
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  anonymous:
+    id: "anonymous"
+    roles: ["anonymous"]
+    attr: {}
+resources:
+  day_e1:
+    id: "D_E1"
+    kind: "day"
+    attr:
+      establishmentId: "E1"
+  day_e2:
+    id: "D_E2"
+    kind: "day"
+    attr:
+      establishmentId: "E2"
+tests:
+  - name: "owner E1 can close day E1"
+    input:
+      principals: ["owner_e1"]
+      resources: ["day_e1"]
+      actions: ["close"]
+    expected:
+      - principal: "owner_e1"
+        resource: "day_e1"
+        actions:
+          close: EFFECT_ALLOW
+  - name: "staff E1 can close day E1"
+    input:
+      principals: ["staff_e1"]
+      resources: ["day_e1"]
+      actions: ["close"]
+    expected:
+      - principal: "staff_e1"
+        resource: "day_e1"
+        actions:
+          close: EFFECT_ALLOW
+  - name: "owner E1 cannot close day E2"
+    input:
+      principals: ["owner_e1"]
+      resources: ["day_e2"]
+      actions: ["close"]
+    expected:
+      - principal: "owner_e1"
+        resource: "day_e2"
+        actions:
+          close: EFFECT_DENY
+  - name: "platform admin can close any day"
+    input:
+      principals: ["platform_admin"]
+      resources: ["day_e2"]
+      actions: ["close"]
+    expected:
+      - principal: "platform_admin"
+        resource: "day_e2"
+        actions:
+          close: EFFECT_ALLOW
+  - name: "player without day permission is denied"
+    input:
+      principals: ["player_a"]
+      resources: ["day_e1"]
+      actions: ["close"]
+    expected:
+      - principal: "player_a"
+        resource: "day_e1"
+        actions:
+          close: EFFECT_DENY
+  - name: "authenticated principal without the permission map is denied"
+    input:
+      principals: ["no_permissions"]
+      resources: ["day_e1"]
+      actions: ["close"]
+    expected:
+      - principal: "no_permissions"
+        resource: "day_e1"
+        actions:
+          close: EFFECT_DENY
+  - name: "anonymous is denied"
+    input:
+      principals: ["anonymous"]
+      resources: ["day_e1"]
+      actions: ["close"]
+    expected:
+      - principal: "anonymous"
+        resource: "day_e1"
+        actions:
+          close: EFFECT_DENY

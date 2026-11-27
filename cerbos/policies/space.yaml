@@ -21,3 +21,54 @@ resourcePolicy:
                 request.principal.attr.establishmentId == request.resource.attr.establishmentId
               )
             )
+    - actions: ["create"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "space:create" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["space:create"] == "platform" ||
+              (
+                request.principal.attr.permissions["space:create"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              )
+            )
+    - actions: ["update"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "space:update" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["space:update"] == "platform" ||
+              (
+                request.principal.attr.permissions["space:update"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              )
+            )
+    - actions: ["delete"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "space:delete" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["space:delete"] == "platform" ||
+              (
+                request.principal.attr.permissions["space:delete"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              )
+            )

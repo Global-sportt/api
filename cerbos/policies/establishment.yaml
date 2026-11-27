@@ -21,3 +21,38 @@ resourcePolicy:
                 request.principal.attr.establishmentId == request.resource.attr.establishmentId
               )
             )
+    - actions: ["create"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "establishment:create" in request.principal.attr.permissions &&
+            request.principal.attr.permissions["establishment:create"] == "platform"
+    - actions: ["update"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "establishment:update" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["establishment:update"] == "platform" ||
+              (
+                request.principal.attr.permissions["establishment:update"] == "establishment" &&
+                has(request.principal.attr.establishmentId) &&
+                has(request.resource.attr.establishmentId) &&
+                request.principal.attr.establishmentId == request.resource.attr.establishmentId
+              )
+            )
+    - actions: ["suspend"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "establishment:suspend" in request.principal.attr.permissions &&
+            request.principal.attr.permissions["establishment:suspend"] == "platform"

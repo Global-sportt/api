@@ -1,0 +1,202 @@
+---
+name: "MembershipSuite"
+description: "membership read/manage — permission map + scope"
+principals:
+  owner_e1:
+    id: "user_owner_e1"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        membership:read: "establishment"
+        membership:manage: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  owner_e2:
+    id: "user_owner_e2"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        membership:read: "establishment"
+        membership:manage: "establishment"
+      establishmentId: "E2"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  staff_e1:
+    id: "user_staff_e1"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        establishment:read: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  platform_admin:
+    id: "user_admin"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        membership:read: "platform"
+        membership:manage: "platform"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: true
+  wrong_scope:
+    id: "user_wrong_scope"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        membership:read: "own"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  player_a:
+    id: "user_a"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        booking:read: "own"
+      isPlatformAdmin: false
+  no_permissions:
+    id: "user_no_permissions"
+    roles: ["authenticated"]
+    attr:
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  anonymous:
+    id: "anonymous"
+    roles: ["anonymous"]
+    attr: {}
+resources:
+  membership_e1:
+    id: "M_E1"
+    kind: "membership"
+    attr:
+      establishmentId: "E1"
+  membership_e2:
+    id: "M_E2"
+    kind: "membership"
+    attr:
+      establishmentId: "E2"
+tests:
+  - name: "owner E1 can read membership E1"
+    input:
+      principals: ["owner_e1"]
+      resources: ["membership_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "owner_e1"
+        resource: "membership_e1"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "owner E1 cannot read membership E2"
+    input:
+      principals: ["owner_e1"]
+      resources: ["membership_e2"]
+      actions: ["read"]
+    expected:
+      - principal: "owner_e1"
+        resource: "membership_e2"
+        actions:
+          read: EFFECT_DENY
+  - name: "staff E1 cannot read memberships"
+    input:
+      principals: ["staff_e1"]
+      resources: ["membership_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "staff_e1"
+        resource: "membership_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "platform admin can read any membership"
+    input:
+      principals: ["platform_admin"]
+      resources: ["membership_e2"]
+      actions: ["read"]
+    expected:
+      - principal: "platform_admin"
+        resource: "membership_e2"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "owner E1 can manage membership E1"
+    input:
+      principals: ["owner_e1"]
+      resources: ["membership_e1"]
+      actions: ["manage"]
+    expected:
+      - principal: "owner_e1"
+        resource: "membership_e1"
+        actions:
+          manage: EFFECT_ALLOW
+  - name: "owner E1 cannot manage membership E2"
+    input:
+      principals: ["owner_e1"]
+      resources: ["membership_e2"]
+      actions: ["manage"]
+    expected:
+      - principal: "owner_e1"
+        resource: "membership_e2"
+        actions:
+          manage: EFFECT_DENY
+  - name: "staff E1 cannot manage memberships"
+    input:
+      principals: ["staff_e1"]
+      resources: ["membership_e1"]
+      actions: ["manage"]
+    expected:
+      - principal: "staff_e1"
+        resource: "membership_e1"
+        actions:
+          manage: EFFECT_DENY
+  - name: "platform admin can manage any membership"
+    input:
+      principals: ["platform_admin"]
+      resources: ["membership_e2"]
+      actions: ["manage"]
+    expected:
+      - principal: "platform_admin"
+        resource: "membership_e2"
+        actions:
+          manage: EFFECT_ALLOW
+  - name: "own scope is not valid for membership reads"
+    input:
+      principals: ["wrong_scope"]
+      resources: ["membership_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "wrong_scope"
+        resource: "membership_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "player without membership permission is denied"
+    input:
+      principals: ["player_a"]
+      resources: ["membership_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "player_a"
+        resource: "membership_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "authenticated principal without the permission map is denied"
+    input:
+      principals: ["no_permissions"]
+      resources: ["membership_e1"]
+      actions: ["manage"]
+    expected:
+      - principal: "no_permissions"
+        resource: "membership_e1"
+        actions:
+          manage: EFFECT_DENY
+  - name: "anonymous is denied"
+    input:
+      principals: ["anonymous"]
+      resources: ["membership_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "anonymous"
+        resource: "membership_e1"
+        actions:
+          read: EFFECT_DENY

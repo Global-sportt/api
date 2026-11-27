@@ -1,6 +1,6 @@
 ---
-name: "SpaceReadSuite"
-description: "space:read — permission map + scope (establishment / platform)"
+name: "SpaceSuite"
+description: "space read/create/update/delete — permission map + scope"
 principals:
   owner_e1:
     id: "user_owner_e1"
@@ -8,6 +8,9 @@ principals:
     attr:
       permissions:
         space:read: "establishment"
+        space:create: "establishment"
+        space:update: "establishment"
+        space:delete: "establishment"
       establishmentId: "E1"
       membershipStatus: "active"
       isPlatformAdmin: false
@@ -17,6 +20,9 @@ principals:
     attr:
       permissions:
         space:read: "establishment"
+        space:create: "establishment"
+        space:update: "establishment"
+        space:delete: "establishment"
       establishmentId: "E2"
       membershipStatus: "active"
       isPlatformAdmin: false
@@ -35,6 +41,9 @@ principals:
     attr:
       permissions:
         space:read: "platform"
+        space:create: "platform"
+        space:update: "platform"
+        space:delete: "platform"
       establishmentId: "E1"
       membershipStatus: "active"
       isPlatformAdmin: true
@@ -84,6 +93,11 @@ resources:
     kind: "space"
     attr:
       establishmentId: "E2"
+  space_new_e1:
+    id: "S_NEW_E1"
+    kind: "space"
+    attr:
+      establishmentId: "E1"
   space_no_tenant:
     id: "S0"
     kind: "space"
@@ -189,3 +203,113 @@ tests:
         resource: "space_e1"
         actions:
           read: EFFECT_DENY
+  - name: "owner E1 can create a space in E1"
+    input:
+      principals: ["owner_e1"]
+      resources: ["space_new_e1"]
+      actions: ["create"]
+    expected:
+      - principal: "owner_e1"
+        resource: "space_new_e1"
+        actions:
+          create: EFFECT_ALLOW
+  - name: "staff E1 cannot create a space"
+    input:
+      principals: ["staff_e1"]
+      resources: ["space_new_e1"]
+      actions: ["create"]
+    expected:
+      - principal: "staff_e1"
+        resource: "space_new_e1"
+        actions:
+          create: EFFECT_DENY
+  - name: "platform admin can create a space without tenant membership"
+    input:
+      principals: ["platform_admin"]
+      resources: ["space_new_e1"]
+      actions: ["create"]
+    expected:
+      - principal: "platform_admin"
+        resource: "space_new_e1"
+        actions:
+          create: EFFECT_ALLOW
+  - name: "authenticated principal without the permission map cannot create"
+    input:
+      principals: ["no_permissions"]
+      resources: ["space_new_e1"]
+      actions: ["create"]
+    expected:
+      - principal: "no_permissions"
+        resource: "space_new_e1"
+        actions:
+          create: EFFECT_DENY
+  - name: "owner E1 can update space S1"
+    input:
+      principals: ["owner_e1"]
+      resources: ["space_e1"]
+      actions: ["update"]
+    expected:
+      - principal: "owner_e1"
+        resource: "space_e1"
+        actions:
+          update: EFFECT_ALLOW
+  - name: "staff E1 cannot update a space"
+    input:
+      principals: ["staff_e1"]
+      resources: ["space_e1"]
+      actions: ["update"]
+    expected:
+      - principal: "staff_e1"
+        resource: "space_e1"
+        actions:
+          update: EFFECT_DENY
+  - name: "owner E1 cannot update space S2"
+    input:
+      principals: ["owner_e1"]
+      resources: ["space_e2"]
+      actions: ["update"]
+    expected:
+      - principal: "owner_e1"
+        resource: "space_e2"
+        actions:
+          update: EFFECT_DENY
+  - name: "owner E1 can delete space S1"
+    input:
+      principals: ["owner_e1"]
+      resources: ["space_e1"]
+      actions: ["delete"]
+    expected:
+      - principal: "owner_e1"
+        resource: "space_e1"
+        actions:
+          delete: EFFECT_ALLOW
+  - name: "staff E1 cannot delete a space"
+    input:
+      principals: ["staff_e1"]
+      resources: ["space_e1"]
+      actions: ["delete"]
+    expected:
+      - principal: "staff_e1"
+        resource: "space_e1"
+        actions:
+          delete: EFFECT_DENY
+  - name: "owner E1 cannot delete space S2"
+    input:
+      principals: ["owner_e1"]
+      resources: ["space_e2"]
+      actions: ["delete"]
+    expected:
+      - principal: "owner_e1"
+        resource: "space_e2"
+        actions:
+          delete: EFFECT_DENY
+  - name: "platform admin can delete any space"
+    input:
+      principals: ["platform_admin"]
+      resources: ["space_e2"]
+      actions: ["delete"]
+    expected:
+      - principal: "platform_admin"
+        resource: "space_e2"
+        actions:
+          delete: EFFECT_ALLOW
