@@ -18,6 +18,7 @@ import type { TenantRequestContext } from '../../common/types/express';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { AddMembershipDto } from './dto/add-membership.dto';
 import type { CreateEstablishmentDto } from './dto/create-establishment.dto';
+import type { UpdateEstablishmentDto } from './dto/update-establishment.dto';
 import type { UpdateMembershipDto } from './dto/update-membership.dto';
 
 const establishmentSelect = {
@@ -26,9 +27,44 @@ const establishmentSelect = {
   slug: true,
   timezone: true,
   currency: true,
+  address: true,
+  contactPhone: true,
+  contactEmail: true,
+  cancellationPolicy: true,
+  usagePolicy: true,
+  rules: true,
   status: true,
   createdAt: true,
 } satisfies Prisma.EstablishmentSelect;
+
+/**
+ * Public profile exposed without authentication. `status` is selected only to
+ * filter inactive establishments and never leaves the service.
+ */
+const publicEstablishmentSelect = {
+  name: true,
+  slug: true,
+  timezone: true,
+  currency: true,
+  address: true,
+  contactPhone: true,
+  contactEmail: true,
+  cancellationPolicy: true,
+  usagePolicy: true,
+  rules: true,
+  status: true,
+} satisfies Prisma.EstablishmentSelect;
+
+const ISO_CURRENCY_PATTERN = /^[A-Z]{3}$/;
+
+/** Contract limits for the editable profile text fields. */
+const PROFILE_TEXT_LIMITS = {
+  address: 300,
+  contactPhone: 40,
+  cancellationPolicy: 4000,
+  usagePolicy: 4000,
+  rules: 4000,
+} as const;
 
 const membershipSelect = {
   id: true,
@@ -98,6 +134,20 @@ export interface MyEstablishment {
   slug: string;
   status: MembershipStatus;
   groups: string[];
+}
+
+/** Anonymous view of an active establishment. */
+export interface PublicEstablishment {
+  name: string;
+  slug: string;
+  timezone: string;
+  currency: string;
+  address: string | null;
+  contactPhone: string | null;
+  contactEmail: string | null;
+  cancellationPolicy: string | null;
+  usagePolicy: string | null;
+  rules: string | null;
 }
 
 @Injectable()
@@ -259,14 +309,171 @@ export class EstablishmentsService {
     });
 
     if (!establishment) {
-      throw new AppError(
-        404,
-        'ESTABLISHMENT_NOT_FOUND',
-        'El establecimiento no existe.',
-      );
+      throw establishmentNotFound();
     }
 
     return establishment;
+  }
+
+  /**
+   * Partial update of the establishment profile.
+   *
+   * Only the declared fields are written. Validation is repeated here (not
+   * only in the DTO) so direct service callers get the same contract. The
+   * audit entry records the actor, the establishment and the changed field
+   * names — never contact values or policy text.
+   */
+  async update(
+    actorId: string,
+    establishmentId: string,
+    dto: UpdateEstablishmentDto,
+  ): Promise<EstablishmentSummary> {
+    const data: Prisma.EstablishmentUpdateInput = {};
+    const changedFields: string[] = [];
+
+    if (dto.name !== undefined && dto.name !== null) {
+      const name = dto.name.trim();
+      if (!name || name.length > 120) {
+        throw validationError(
+          'name',
+          'El nombre debe tener entre 1 y 120 caracteres.',
+        );
+      }
+      data.name = name;
+      changedFields.push('name');
+    }
+
+    if (dto.timezone !== undefined && dto.timezone !== null) {
+      if (!isValidTimeZone(dto.timezone)) {
+        throw new AppError(
+          400,
+          'VALIDATION_ERROR',
+          'timezone debe ser una zona IANA válida.',
+          [{ field: 'timezone', constraints: ['isTimeZone'] }],
+        );
+      }
+      data.timezone = dto.timezone;
+      changedFields.push('timezone');
+    }
+
+    if (dto.currency !== undefined && dto.currency !== null) {
+      if (!ISO_CURRENCY_PATTERN.test(dto.currency)) {
+        throw validationError(
+          'currency',
+          'currency debe ser un código ISO de 3 letras en mayúsculas.',
+        );
+      }
+      data.currency = dto.currency;
+      changedFields.push('currency');
+    }
+
+    if (dto.address !== undefined) {
+      data.address = normalizeProfileText(
+        dto.address,
+        'address',
+        PROFILE_TEXT_LIMITS.address,
+      );
+      changedFields.push('address');
+    }
+
+    if (dto.contactPhone !== undefined) {
+      data.contactPhone = normalizeProfileText(
+        dto.contactPhone,
+        'contactPhone',
+        PROFILE_TEXT_LIMITS.contactPhone,
+      );
+      changedFields.push('contactPhone');
+    }
+
+    if (dto.contactEmail !== undefined) {
+      data.contactEmail = normalizeProfileText(
+        dto.contactEmail,
+        'contactEmail',
+        254,
+      );
+      changedFields.push('contactEmail');
+    }
+
+    if (dto.cancellationPolicy !== undefined) {
+      data.cancellationPolicy = normalizeProfileText(
+        dto.cancellationPolicy,
+        'cancellationPolicy',
+        PROFILE_TEXT_LIMITS.cancellationPolicy,
+      );
+      changedFields.push('cancellationPolicy');
+    }
+
+    if (dto.usagePolicy !== undefined) {
+      data.usagePolicy = normalizeProfileText(
+        dto.usagePolicy,
+        'usagePolicy',
+        PROFILE_TEXT_LIMITS.usagePolicy,
+      );
+      changedFields.push('usagePolicy');
+    }
+
+    if (dto.rules !== undefined) {
+      data.rules = normalizeProfileText(
+        dto.rules,
+        'rules',
+        PROFILE_TEXT_LIMITS.rules,
+      );
+      changedFields.push('rules');
+    }
+
+    if (changedFields.length === 0) {
+      throw new AppError(
+        400,
+        'VALIDATION_ERROR',
+        'Debes indicar al menos un campo para actualizar.',
+      );
+    }
+
+    const existing = await this.prisma.establishment.findUnique({
+      where: { id: establishmentId },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      throw establishmentNotFound();
+    }
+
+    const updated = await this.prisma.establishment.update({
+      where: { id: establishmentId },
+      data,
+      select: establishmentSelect,
+    });
+
+    this.audit('establishment.updated', {
+      actorId,
+      establishmentId,
+      changedFields,
+    });
+
+    return updated;
+  }
+
+  /**
+   * Anonymous profile of an active establishment. A missing or non-active
+   * slug is deliberately indistinguishable (404) to avoid leaking tenants.
+   */
+  async getPublicBySlug(slug: string): Promise<PublicEstablishment> {
+    const establishment = await this.prisma.establishment.findUnique({
+      where: { slug },
+      select: publicEstablishmentSelect,
+    });
+
+    if (!establishment || establishment.status !== EstablishmentStatus.active) {
+      throw new AppError(
+        404,
+        'ESTABLISHMENT_NOT_FOUND',
+        'El establecimiento no existe o no está disponible.',
+      );
+    }
+
+    const { status: _status, ...profile } = establishment;
+
+    return profile;
   }
 
   async listMemberships(
@@ -688,11 +895,7 @@ async function lockEstablishment(
   `;
 
   if (rows.length === 0) {
-    throw new AppError(
-      404,
-      'ESTABLISHMENT_NOT_FOUND',
-      'El establecimiento no existe.',
-    );
+    throw establishmentNotFound();
   }
 }
 
@@ -730,6 +933,44 @@ function membershipNotFound(): AppError {
     'MEMBERSHIP_NOT_FOUND',
     'La membresía no existe en este establecimiento.',
   );
+}
+
+function establishmentNotFound(): AppError {
+  return new AppError(
+    404,
+    'ESTABLISHMENT_NOT_FOUND',
+    'El establecimiento no existe.',
+  );
+}
+
+function validationError(field: string, message: string): AppError {
+  return new AppError(400, 'VALIDATION_ERROR', message, [
+    { field, constraints: [message] },
+  ]);
+}
+
+/**
+ * Trims optional profile text. An empty value clears the column (`null`), so a
+ * client can remove contact data or a policy without a second endpoint.
+ */
+function normalizeProfileText(
+  value: string | null,
+  field: string,
+  maxLength: number,
+): string | null {
+  if (value === null) return null;
+
+  const text = value.trim();
+  if (!text) return null;
+
+  if (text.length > maxLength) {
+    throw validationError(
+      field,
+      `${field} no puede superar ${maxLength} caracteres.`,
+    );
+  }
+
+  return text;
 }
 
 // Re-exported for tests that assert the invariant in isolation.

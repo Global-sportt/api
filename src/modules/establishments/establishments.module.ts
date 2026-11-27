@@ -9,11 +9,12 @@ import {
   EstablishmentsController,
   MembershipsController,
   MyEstablishmentsController,
+  PublicEstablishmentsController,
 } from './establishments.controller';
 import { EstablishmentsService } from './establishments.service';
 
 /**
- * Establishments and tenant memberships (T4).
+ * Establishments, tenant memberships (T4) and the public establishment profile.
  *
  * Integration note for A0: `AuthorizationGuard` depends on the
  * `AUTHORIZATION_SERVICE` token (Cerbos adapter), which is not provided by
@@ -28,6 +29,7 @@ import { EstablishmentsService } from './establishments.service';
     MyEstablishmentsController,
     EstablishmentsController,
     MembershipsController,
+    PublicEstablishmentsController,
   ],
   providers: [
     EstablishmentsService,

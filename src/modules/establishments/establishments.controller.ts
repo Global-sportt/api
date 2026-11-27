@@ -15,6 +15,7 @@ import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
@@ -22,6 +23,7 @@ import { AuthenticatedOnly } from '../../common/authz/authenticated-only.decorat
 import { Authorize } from '../../common/authz/authorize.decorator';
 import { AuthorizationGuard } from '../../common/authz/authorization.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { Public } from '../../common/decorators/public.decorator';
 import { AppError } from '../../common/errors/app-error';
 import { TenantGuard } from '../../common/guards/tenant.guard';
 import type {
@@ -30,8 +32,16 @@ import type {
 } from '../../common/types/express';
 import { AddMembershipDto } from './dto/add-membership.dto';
 import { CreateEstablishmentDto } from './dto/create-establishment.dto';
+import {
+  EstablishmentResponseDto,
+  PublicEstablishmentResponseDto,
+} from './dto/establishment-response.dto';
+import { UpdateEstablishmentDto } from './dto/update-establishment.dto';
 import { UpdateMembershipDto } from './dto/update-membership.dto';
-import { EstablishmentsService } from './establishments.service';
+import {
+  EstablishmentsService,
+  type PublicEstablishment,
+} from './establishments.service';
 
 @ApiTags('establishments')
 @ApiBearerAuth()
@@ -93,9 +103,63 @@ export class EstablishmentsController {
   @Get(':id')
   @Authorize('establishment', 'read')
   @ApiOperation({ summary: 'Consultar un establecimiento del tenant' })
-  @ApiOkResponse({ description: 'Establecimiento' })
+  @ApiOkResponse({
+    type: EstablishmentResponseDto,
+    description: 'Establecimiento',
+  })
   getById(@Param('id') id: string) {
     return this.establishments.getById(id);
+  }
+
+  @Patch(':id')
+  @Authorize('establishment', 'update')
+  @ApiOperation({
+    summary: 'Actualizar el perfil de un establecimiento del tenant',
+    description:
+      'Actualización parcial del nombre, zona horaria, moneda, datos de contacto y políticas. Al menos un campo; el body vacío responde 400.',
+  })
+  @ApiOkResponse({
+    type: EstablishmentResponseDto,
+    description: 'Establecimiento actualizado',
+  })
+  @ApiResponse({ status: 400, description: 'Datos inválidos o body vacío.' })
+  @ApiResponse({ status: 403, description: 'Sin permiso establishment:update.' })
+  @ApiResponse({ status: 404, description: 'Establecimiento no encontrado.' })
+  update(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedPrincipal,
+    @Body() dto: UpdateEstablishmentDto,
+  ) {
+    return this.establishments.update(user.userId, id, dto);
+  }
+}
+
+@ApiTags('establishments')
+@Controller('public/establishments')
+export class PublicEstablishmentsController {
+  constructor(private readonly establishments: EstablishmentsService) {}
+
+  /**
+   * Anonymous profile. `@Public()` skips authentication; the service only
+   * returns active establishments and treats every other case as 404.
+   */
+  @Public()
+  @Get(':slug')
+  @ApiOperation({
+    summary: 'Consultar el perfil público de un establecimiento',
+    description:
+      'No requiere autenticación. Solo devuelve establecimientos activos; un slug inexistente o inactivo responde 404.',
+  })
+  @ApiOkResponse({
+    type: PublicEstablishmentResponseDto,
+    description: 'Perfil público del establecimiento',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Establecimiento no encontrado o no disponible.',
+  })
+  getBySlug(@Param('slug') slug: string): Promise<PublicEstablishment> {
+    return this.establishments.getPublicBySlug(slug);
   }
 }
 
