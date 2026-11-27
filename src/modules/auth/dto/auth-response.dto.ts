@@ -8,9 +8,6 @@ export class UserResponseDto {
   @ApiProperty({ format: 'email' })
   email!: string;
 
-  @ApiProperty({ enum: ['player', 'owner', 'staff', 'admin'] })
-  role!: string;
-
   @ApiProperty({ enum: ['active', 'suspended', 'deleted'] })
   status!: string;
 
@@ -33,7 +30,6 @@ export class UserResponseDto {
     return {
       id: user.id,
       email: user.email,
-      role: user.role,
       status: user.status,
       emailVerified: user.emailVerified,
       displayName: user.displayName,

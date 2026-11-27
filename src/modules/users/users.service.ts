@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, UserStatus } from '@prisma/client';
+import { GroupScope, Prisma, UserStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { AppRole } from '../../common/auth/roles';
+import { PLAYER_GROUP_SLUG } from '../../common/authz/permissions';
 import { normalizeEmail } from '../../common/utils/crypto.util';
 
 export const userWithProfile = {
@@ -15,7 +15,6 @@ export type UserWithProfile = Prisma.UserGetPayload<{
 export interface PublicUser {
   id: string;
   email: string;
-  role: AppRole;
   status: UserStatus;
   emailVerified: boolean;
   displayName: string | null;
@@ -60,17 +59,22 @@ export class UsersService {
     passwordHash: string;
     displayName?: string;
   }): Promise<UserWithProfile> {
-    return this.prisma.user.create({
-      data: {
-        email: normalizeEmail(input.email),
-        passwordHash: input.passwordHash,
-        profile: {
-          create: {
-            displayName: input.displayName?.trim() || this.defaultName(input.email),
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          email: normalizeEmail(input.email),
+          passwordHash: input.passwordHash,
+          profile: {
+            create: {
+              displayName: input.displayName?.trim() || this.defaultName(input.email),
+            },
           },
         },
-      },
-      include: userWithProfile,
+        include: userWithProfile,
+      });
+
+      await this.assignPlayerGroup(tx, user.id);
+      return user;
     });
   }
 
@@ -81,26 +85,32 @@ export class UsersService {
     provider: string;
     providerAccountId: string;
   }): Promise<UserWithProfile> {
-    return this.prisma.user.create({
-      data: {
-        email: normalizeEmail(input.email),
-        emailVerifiedAt: new Date(),
-        profile: {
-          create: {
-            displayName: input.displayName?.trim() || this.defaultName(input.email),
-            avatarUrl: input.avatarUrl,
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          email: normalizeEmail(input.email),
+          emailVerifiedAt: new Date(),
+          profile: {
+            create: {
+              displayName:
+                input.displayName?.trim() || this.defaultName(input.email),
+              avatarUrl: input.avatarUrl,
+            },
+          },
+          oauthAccounts: {
+            create: {
+              provider: input.provider,
+              providerAccountId: input.providerAccountId,
+              email: normalizeEmail(input.email),
+              lastLoginAt: new Date(),
+            },
           },
         },
-        oauthAccounts: {
-          create: {
-            provider: input.provider,
-            providerAccountId: input.providerAccountId,
-            email: normalizeEmail(input.email),
-            lastLoginAt: new Date(),
-          },
-        },
-      },
-      include: userWithProfile,
+        include: userWithProfile,
+      });
+
+      await this.assignPlayerGroup(tx, user.id);
+      return user;
     });
   }
 
@@ -212,7 +222,6 @@ export class UsersService {
     return {
       id: user.id,
       email: user.email,
-      role: user.role as AppRole,
       status: user.status,
       emailVerified: user.emailVerifiedAt !== null,
       displayName: user.profile?.displayName ?? null,
@@ -220,6 +229,39 @@ export class UsersService {
       locale: user.profile?.locale ?? 'es-CO',
       createdAt: user.createdAt.toISOString(),
     };
+  }
+
+  /**
+   * Q11: todo usuario registrado recibe el grupo global `player`, incluso si
+   * más adelante es owner o staff de una sede. El seed es obligatorio; si el
+   * grupo no existe, el alta falla en lugar de crear un usuario sin permisos.
+   */
+  private async assignPlayerGroup(
+    tx: Prisma.TransactionClient,
+    userId: string,
+  ): Promise<void> {
+    const playerGroup = await tx.securityGroup.findFirst({
+      where: {
+        establishmentId: null,
+        slug: PLAYER_GROUP_SLUG,
+        scope: GroupScope.global,
+      },
+      select: { id: true },
+    });
+
+    if (!playerGroup) {
+      throw new Error(
+        `No existe el grupo global "${PLAYER_GROUP_SLUG}". Ejecuta "npx prisma db seed" antes de registrar usuarios.`,
+      );
+    }
+
+    await tx.userGlobalGroup.create({
+      data: {
+        userId,
+        groupId: playerGroup.id,
+        groupScope: GroupScope.global,
+      },
+    });
   }
 
   private defaultName(email: string): string {

@@ -27,7 +27,6 @@ describe('TokenService', () => {
     const signed = await service.signAccessToken({
       userId: '11111111-1111-4111-8111-111111111111',
       sessionId: '22222222-2222-4222-8222-222222222222',
-      role: 'player',
     });
 
     expect(signed.expiresIn).toBe(900);
@@ -35,7 +34,6 @@ describe('TokenService', () => {
     expect(principal).toEqual({
       userId: '11111111-1111-4111-8111-111111111111',
       sessionId: '22222222-2222-4222-8222-222222222222',
-      role: 'player',
     });
   });
 
@@ -43,7 +41,6 @@ describe('TokenService', () => {
     const signed = await service.signAccessToken({
       userId: '11111111-1111-4111-8111-111111111111',
       sessionId: '22222222-2222-4222-8222-222222222222',
-      role: 'player',
     });
 
     const tampered = `${signed.token.slice(0, -2)}xx`;
@@ -64,7 +61,6 @@ describe('TokenService', () => {
     const token = await other.signAsync({
       sub: '11111111-1111-4111-8111-111111111111',
       sid: '22222222-2222-4222-8222-222222222222',
-      role: 'player',
       typ: 'access',
     });
 

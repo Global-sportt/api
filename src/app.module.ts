@@ -12,7 +12,6 @@ import { AppConfigModule } from './config/app-config.module';
 import { LoggingModule } from './common/logging/logging.module';
 import { ProblemDetailsFilter } from './common/filters/problem-details.filter';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
-import { RolesGuard } from './common/guards/roles.guard';
 import { AuthenticationMiddleware } from './common/middleware/authentication.middleware';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware';
 import { SecurityMiddleware } from './common/middleware/security.middleware';
@@ -56,10 +55,6 @@ import { HealthModule } from './modules/health/health.module';
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
-    },
-    {
-      provide: APP_GUARD,
-      useClass: RolesGuard,
     },
     {
       provide: APP_FILTER,

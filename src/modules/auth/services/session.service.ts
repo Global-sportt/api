@@ -3,7 +3,6 @@ import { AuthEventType, UserStatus } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { AppConfigService } from '../../../config/app-config.service';
 import type { RequestMetadata } from '../../../common/http/request-metadata';
-import type { AppRole } from '../../../common/auth/roles';
 import { AppError } from '../../../common/errors/app-error';
 import {
   randomToken,
@@ -80,7 +79,6 @@ export class SessionService {
     const access = await this.tokens.signAccessToken({
       userId: user.id,
       sessionId,
-      role: user.role as AppRole,
     });
 
     return {
@@ -212,7 +210,6 @@ export class SessionService {
     const access = await this.tokens.signAccessToken({
       userId: session.userId,
       sessionId: session.id,
-      role: session.user.role as AppRole,
     });
 
     await this.events.record({
