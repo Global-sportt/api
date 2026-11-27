@@ -10,6 +10,10 @@ import {
   PLAYER_GROUP_SLUG,
   STAFF_GRANT_CODES,
   STAFF_GROUP_SLUG,
+  SYSTEM_KEY_OWNER,
+  SYSTEM_KEY_PLATFORM_ADMIN,
+  SYSTEM_KEY_PLAYER,
+  SYSTEM_KEY_STAFF,
   type PermissionCode,
   type PermissionDefinition,
 } from './permissions';
@@ -129,6 +133,15 @@ const GROUP_FIXTURES: readonly GroupFixture[] = [
     expectedGrants: 10,
   },
 ];
+
+describe('marcadores de grupos de sistema', () => {
+  it('coinciden con los valores fijados por el check SQL', () => {
+    expect(SYSTEM_KEY_PLAYER).toBe('global:player');
+    expect(SYSTEM_KEY_PLATFORM_ADMIN).toBe('global:platform-admin');
+    expect(SYSTEM_KEY_OWNER).toBe('establishment:owner');
+    expect(SYSTEM_KEY_STAFF).toBe('establishment:staff');
+  });
+});
 
 describe('PERMISSION_CATALOG', () => {
   it('contiene exactamente 20 códigos únicos', () => {
