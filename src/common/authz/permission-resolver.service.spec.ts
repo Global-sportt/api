@@ -15,6 +15,10 @@ import {
   PLAYER_GROUP_SLUG,
   STAFF_GRANT_CODES,
   STAFF_GROUP_SLUG,
+  SYSTEM_KEY_OWNER,
+  SYSTEM_KEY_PLATFORM_ADMIN,
+  SYSTEM_KEY_PLAYER,
+  SYSTEM_KEY_STAFF,
   type PermissionCode,
 } from './permissions';
 
@@ -25,6 +29,7 @@ interface GrantRecord {
 
 interface GroupRecord {
   slug: string;
+  systemKey: string | null;
   scope: GroupScope;
   permissions: GrantRecord[];
 }
@@ -114,12 +119,14 @@ class FakePrisma {
 
 function makeGroup(
   slug: string,
+  systemKey: string | null,
   scope: GroupScope,
   codes: readonly PermissionCode[],
   grantScope: PermissionScope,
 ): GroupRecord {
   return {
     slug,
+    systemKey,
     scope,
     permissions: codes.map((code) => ({
       scope: grantScope,
@@ -130,11 +137,12 @@ function makeGroup(
 
 function globalGroup(
   slug: string,
+  systemKey: string | null,
   codes: readonly PermissionCode[],
   grantScope: PermissionScope,
 ): GlobalAssignmentRecord {
   return {
-    group: makeGroup(slug, GroupScope.global, codes, grantScope),
+    group: makeGroup(slug, systemKey, GroupScope.global, codes, grantScope),
   };
 }
 
@@ -148,6 +156,7 @@ function membership(
 function playerGroup(): GlobalAssignmentRecord {
   return globalGroup(
     PLAYER_GROUP_SLUG,
+    SYSTEM_KEY_PLAYER,
     PLAYER_GRANT_CODES,
     PermissionScope.own,
   );
@@ -156,6 +165,7 @@ function playerGroup(): GlobalAssignmentRecord {
 function platformAdminGroup(): GlobalAssignmentRecord {
   return globalGroup(
     PLATFORM_ADMIN_GROUP_SLUG,
+    SYSTEM_KEY_PLATFORM_ADMIN,
     PLATFORM_ADMIN_GRANT_CODES,
     PermissionScope.platform,
   );
@@ -164,6 +174,7 @@ function platformAdminGroup(): GlobalAssignmentRecord {
 function ownerGroup(): GroupRecord {
   return makeGroup(
     OWNER_GROUP_SLUG,
+    SYSTEM_KEY_OWNER,
     GroupScope.establishment,
     OWNER_GRANT_CODES,
     PermissionScope.establishment,
@@ -173,6 +184,7 @@ function ownerGroup(): GroupRecord {
 function staffGroup(): GroupRecord {
   return makeGroup(
     STAFF_GROUP_SLUG,
+    SYSTEM_KEY_STAFF,
     GroupScope.establishment,
     STAFF_GRANT_CODES,
     PermissionScope.establishment,
@@ -397,6 +409,40 @@ describe('PermissionResolver', () => {
     expect(tenant.isPlatformAdmin).toBe(true);
     expect(tenant.establishmentId).toBe('E9');
     expect(tenant.membershipStatus).toBeUndefined();
+  });
+
+  it('identifica platform-admin por system_key aunque el slug haya cambiado', async () => {
+    const { resolver, fake } = setup();
+    fake.addUser('admin-2', [
+      globalGroup(
+        'platform-admin-renamed',
+        SYSTEM_KEY_PLATFORM_ADMIN,
+        PLATFORM_ADMIN_GRANT_CODES,
+        PermissionScope.platform,
+      ),
+    ]);
+
+    const resolved = await resolver.resolve('admin-2');
+
+    expect(resolved.isPlatformAdmin).toBe(true);
+    expect(resolved.permissions).toEqual(platformAtPlatform);
+  });
+
+  it('no trata como platform-admin un grupo con slug platform-admin sin system_key', async () => {
+    const { resolver, fake } = setup();
+    fake.addUser('fake-admin', [
+      globalGroup(
+        PLATFORM_ADMIN_GROUP_SLUG,
+        null,
+        PLAYER_GRANT_CODES,
+        PermissionScope.own,
+      ),
+    ]);
+
+    const resolved = await resolver.resolve('fake-admin');
+
+    expect(resolved.isPlatformAdmin).toBe(false);
+    expect(resolved.permissions).toEqual(playerOwn);
   });
 
   it('reutiliza la resolución para el mismo user, tenant y versión', async () => {
