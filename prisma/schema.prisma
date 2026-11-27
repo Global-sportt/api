@@ -31,6 +31,12 @@ enum EstablishmentStatus {
   suspended
 }
 
+enum SpaceStatus {
+  active
+  inactive
+  maintenance
+}
+
 enum UserStatus {
   active
   suspended
@@ -262,6 +268,7 @@ model Establishment {
 
   securityGroups SecurityGroup[]
   memberships    Membership[]
+  spaces         Space[]
 
   @@map("establishments")
 }
@@ -314,4 +321,70 @@ model AuthorizationVersion {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@map("authorization_versions")
+}
+
+model Space {
+  id              String      @id @default(uuid()) @db.Uuid
+  establishmentId String      @map("establishment_id") @db.Uuid
+  name            String
+  slug            String
+  sport           String?
+  slotMinutes     Int         @default(60) @map("slot_minutes")
+  bufferMinutes   Int         @default(0) @map("buffer_minutes")
+  status          SpaceStatus @default(active)
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  establishment  Establishment       @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
+  operatingHours OperatingHour[]
+  exceptions     ScheduleException[]
+  priceRules     PriceRule[]
+
+  @@unique([establishmentId, slug])
+  @@index([establishmentId, status])
+  @@map("spaces")
+}
+
+model OperatingHour {
+  id              String @id @default(uuid()) @db.Uuid
+  spaceId         String @map("space_id") @db.Uuid
+  dayOfWeek       Int    @map("day_of_week")
+  opensAtMinutes  Int    @map("opens_at_minutes")
+  closesAtMinutes Int    @map("closes_at_minutes")
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, dayOfWeek])
+  @@map("operating_hours")
+}
+
+model ScheduleException {
+  id              String   @id @default(uuid()) @db.Uuid
+  spaceId         String   @map("space_id") @db.Uuid
+  date            DateTime @db.Date
+  isClosed        Boolean  @default(false) @map("is_closed")
+  opensAtMinutes  Int?     @map("opens_at_minutes")
+  closesAtMinutes Int?     @map("closes_at_minutes")
+  reason          String?
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, date])
+  @@map("schedule_exceptions")
+}
+
+model PriceRule {
+  id              String @id @default(uuid()) @db.Uuid
+  spaceId         String @map("space_id") @db.Uuid
+  dayOfWeek       Int?   @map("day_of_week")
+  startsAtMinutes Int    @map("starts_at_minutes")
+  endsAtMinutes   Int    @map("ends_at_minutes")
+  amountMinor     BigInt @map("amount_minor")
+  currency        String @default("COP")
+  priority        Int    @default(0)
+
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@index([spaceId, dayOfWeek])
+  @@map("price_rules")
 }

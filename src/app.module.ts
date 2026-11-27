@@ -22,6 +22,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthzModule } from './common/authz/authz.module';
 import { EstablishmentsModule } from './modules/establishments/establishments.module';
+import { SpacesModule } from './modules/spaces/spaces.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { EstablishmentsModule } from './modules/establishments/establishments.mo
     HealthModule,
     AuthzModule,
     EstablishmentsModule,
+    SpacesModule,
   ],
   providers: [
     {
