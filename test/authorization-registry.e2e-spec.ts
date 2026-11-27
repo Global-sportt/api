@@ -52,6 +52,18 @@ describe('Authorization route registry (e2e)', () => {
       'authorize',
       'space:read',
     );
+    expectRoute(
+      byRoute,
+      'POST /establishments/:id/spaces',
+      'authorize',
+      'space:create',
+    );
+    expectRoute(
+      byRoute,
+      'PATCH /establishments/:id/spaces/:spaceId',
+      'authorize',
+      'space:update',
+    );
     expectRoute(byRoute, 'GET /health/ready', 'public');
   });
 });

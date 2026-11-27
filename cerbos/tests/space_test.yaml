@@ -313,3 +313,23 @@ tests:
         resource: "space_e2"
         actions:
           delete: EFFECT_ALLOW
+  - name: "platform admin can update any space"
+    input:
+      principals: ["platform_admin"]
+      resources: ["space_e2"]
+      actions: ["update"]
+    expected:
+      - principal: "platform_admin"
+        resource: "space_e2"
+        actions:
+          update: EFFECT_ALLOW
+  - name: "owner E2 cannot create a space in E1"
+    input:
+      principals: ["owner_e2"]
+      resources: ["space_new_e1"]
+      actions: ["create"]
+    expected:
+      - principal: "owner_e2"
+        resource: "space_new_e1"
+        actions:
+          create: EFFECT_DENY
