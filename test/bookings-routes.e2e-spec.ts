@@ -337,7 +337,7 @@ describe('Bookings routes RT-03..RT-08 (HTTP e2e)', () => {
     expect(selfBookings.staffE1).toEqual(expect.any(String));
   });
 
-  it('RT-03: GET /me/bookings — cada principal solo ve sus propias reservas', async () => {
+  it('RT-03/NEG-01: GET /me/bookings — cada principal solo ve sus propias reservas', async () => {
     const anonymous = await request(server())
       .get('/api/v1/me/bookings')
       .set('Origin', ORIGIN)
@@ -386,7 +386,7 @@ describe('Bookings routes RT-03..RT-08 (HTTP e2e)', () => {
     expectProblem(idor, 404, 'BOOKING_NOT_FOUND');
   });
 
-  it('RT-05: POST /me/bookings/:id/cancel — cada principal cancela la propia; la ajena 404', async () => {
+  it('RT-05/NEG-01: POST /me/bookings/:id/cancel — cada principal cancela la propia; la ajena 404', async () => {
     const anonymous = await request(server())
       .post(`/api/v1/me/bookings/${selfBookings.playerA}/cancel`)
       .set('Origin', ORIGIN)
