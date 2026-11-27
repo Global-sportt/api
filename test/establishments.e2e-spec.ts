@@ -1,6 +1,10 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { GroupScope, MembershipStatus } from '@prisma/client';
+import {
+  EstablishmentStatus,
+  GroupScope,
+  MembershipStatus,
+} from '@prisma/client';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
@@ -60,6 +64,17 @@ interface MembershipBody {
   userId: string;
   status: string;
   groups: Array<{ slug: string; name: string }>;
+}
+
+interface EstablishmentProfileBody extends EstablishmentBody {
+  timezone: string;
+  currency: string;
+  address: string | null;
+  contactPhone: string | null;
+  contactEmail: string | null;
+  cancellationPolicy: string | null;
+  usagePolicy: string | null;
+  rules: string | null;
 }
 
 let app: INestApplication;
@@ -908,5 +923,274 @@ describe('Establishments y membresías (e2e)', () => {
     const rejected = first.status === 409 ? first : second;
     expect(rejected.body.code).toBe('INVALID_STATE');
     expect(await countActiveOwners(e1.id)).toBe(1);
+  });
+
+  describe('Perfil del establecimiento (e2e)', () => {
+    let profileOwner: TestUser;
+    let profileStaff: TestUser;
+    let profileOtherOwner: TestUser;
+    let own: EstablishmentProfileBody;
+    let other: EstablishmentProfileBody;
+    let suspended: EstablishmentProfileBody;
+    let slugCounter = 0;
+
+    const profile = {
+      address: 'Calle 123 #45-67, Bogotá',
+      contactPhone: '+57 601 555 0101',
+      contactEmail: 'perfil@cancha.example',
+      cancellationPolicy: 'Cancelación sin costo hasta 24 horas antes.',
+      usagePolicy: 'Uso exclusivo para actividades deportivas.',
+      rules: 'Prohibido ingresar con alimentos.',
+    };
+
+    async function createProfileEstablishment(
+      name: string,
+      ownerUserId: string,
+    ): Promise<EstablishmentProfileBody> {
+      slugCounter += 1;
+      const response = await bearer(
+        request(server())
+          .post('/api/v1/admin/establishments')
+          .send({
+            name,
+            slug: `e2e-perfil-${slugCounter}-${Date.now()}`,
+            ownerUserId,
+          }),
+        admin.token,
+      ).expect(201);
+
+      return response.body as EstablishmentProfileBody;
+    }
+
+    function patchProfile(
+      establishmentId: string,
+      token: string,
+      body: Record<string, unknown>,
+    ): request.Test {
+      return bearer(
+        request(server()).patch(`/api/v1/establishments/${establishmentId}`).send(body),
+        token,
+      );
+    }
+
+    beforeAll(async () => {
+      profileOwner = await registerUser('profile-owner');
+      profileStaff = await registerUser('profile-staff');
+      profileOtherOwner = await registerUser('profile-other');
+
+      own = await createProfileEstablishment(
+        'E2E Perfil Propio',
+        profileOwner.userId,
+      );
+      other = await createProfileEstablishment(
+        'E2E Perfil Ajeno',
+        profileOtherOwner.userId,
+      );
+      suspended = await createProfileEstablishment(
+        'E2E Perfil Suspendido',
+        profileOtherOwner.userId,
+      );
+
+      await bearer(
+        request(server())
+          .post(`/api/v1/establishments/${own.id}/memberships`)
+          .send({ userId: profileStaff.userId, groupSlug: 'staff' }),
+        profileOwner.token,
+      ).expect(201);
+
+      await prisma.establishment.update({
+        where: { id: suspended.id },
+        data: { status: EstablishmentStatus.suspended },
+      });
+    });
+
+    it('el owner edita su sede: PATCH y GET devuelven los campos nuevos con status', async () => {
+      const updated = await patchProfile(own.id, profileOwner.token, {
+        ...profile,
+        name: 'E2E Perfil Propio Editado',
+        timezone: 'America/Lima',
+        currency: 'PEN',
+      }).expect(200);
+
+      expect(updated.body).toMatchObject({
+        id: own.id,
+        name: 'E2E Perfil Propio Editado',
+        timezone: 'America/Lima',
+        currency: 'PEN',
+        status: 'active',
+        ...profile,
+      });
+
+      const fetched = await bearer(
+        request(server()).get(`/api/v1/establishments/${own.id}`),
+        profileOwner.token,
+      ).expect(200);
+
+      expect(fetched.body).toMatchObject({ ...profile, status: 'active' });
+
+      const stored = await prisma.establishment.findUnique({
+        where: { id: own.id },
+      });
+      expect(stored).toMatchObject({
+        name: 'E2E Perfil Propio Editado',
+        timezone: 'America/Lima',
+        currency: 'PEN',
+        address: profile.address,
+        contactEmail: profile.contactEmail,
+        rules: profile.rules,
+      });
+    });
+
+    it('staff recibe 403 PERMISSION_DENIED y no modifica la sede', async () => {
+      const denied = await patchProfile(own.id, profileStaff.token, {
+        address: 'Dirección del staff',
+      }).expect(403);
+
+      expect(denied.body.code).toBe('PERMISSION_DENIED');
+      const stored = await prisma.establishment.findUnique({
+        where: { id: own.id },
+      });
+      expect(stored?.address).toBe(profile.address);
+    });
+
+    it('el dueño de otra sede recibe 403 T (Q4) y una sede inexistente 404', async () => {
+      const denied = await patchProfile(own.id, profileOtherOwner.token, {
+        address: 'Dirección ajena',
+      }).expect(403);
+      expect(denied.body.code).toBe('TENANT_FORBIDDEN');
+
+      const missing = await patchProfile(
+        MISSING_ESTABLISHMENT,
+        profileOwner.token,
+        { address: 'Sede fantasma' },
+      ).expect(404);
+      expect(missing.body.code).toBe('ESTABLISHMENT_NOT_FOUND');
+    });
+
+    it('platform-admin edita cualquier sede', async () => {
+      const updated = await patchProfile(other.id, admin.token, {
+        contactPhone: '+57 300 999 8888',
+      }).expect(200);
+
+      expect(updated.body.contactPhone).toBe('+57 300 999 8888');
+      expect(updated.body.status).toBe('active');
+    });
+
+    it('rechaza body vacío, valores inválidos y campos fuera del contrato', async () => {
+      const empty = await patchProfile(own.id, profileOwner.token, {}).expect(
+        400,
+      );
+      expect(empty.body.code).toBe('VALIDATION_ERROR');
+
+      const invalidBodies: Array<Record<string, unknown>> = [
+        { timezone: 'No/Existe' },
+        { currency: 'cop' },
+        { currency: 'CO' },
+        { contactEmail: 'no-es-un-email' },
+        { name: '' },
+        { name: 'x'.repeat(121) },
+        { address: 'x'.repeat(301) },
+        { contactPhone: '1'.repeat(41) },
+        { cancellationPolicy: 'x'.repeat(4001) },
+        { usagePolicy: 'x'.repeat(4001) },
+        { rules: 'x'.repeat(4001) },
+        { status: 'suspended' },
+      ];
+
+      for (const body of invalidBodies) {
+        const rejected = await patchProfile(
+          own.id,
+          profileOwner.token,
+          body,
+        ).expect(400);
+        expect(rejected.body.code).toBe('VALIDATION_ERROR');
+      }
+    });
+
+    it('audita actor, sede y nombres de campos sin registrar valores', async () => {
+      const logger = app.get(AppLogger);
+      const info = jest.spyOn(logger.raw, 'info');
+      info.mockClear();
+
+      await patchProfile(own.id, profileOwner.token, {
+        cancellationPolicy: 'Nueva política de cancelación.',
+        contactPhone: '+57 601 000 1111',
+      }).expect(200);
+
+      const call = info.mock.calls.find(
+        ([payload]) =>
+          (payload as { event?: string }).event === 'establishment.updated',
+      );
+      expect(call).toBeDefined();
+
+      const [payload, message] = call as [Record<string, unknown>, string];
+      expect(message).toBe('establishment.updated');
+      expect(payload).toMatchObject({
+        actorId: profileOwner.userId,
+        establishmentId: own.id,
+        changedFields: ['contactPhone', 'cancellationPolicy'],
+        decision: 'allow',
+      });
+
+      const serialized = JSON.stringify(payload);
+      expect(serialized).not.toContain('Nueva política de cancelación.');
+      expect(serialized).not.toContain('+57 601 000 1111');
+
+      info.mockRestore();
+    });
+
+    it('la consulta pública devuelve el perfil de una sede activa sin autenticación', async () => {
+      const response = await request(server())
+        .get(`/api/v1/public/establishments/${own.slug}`)
+        .set('Origin', ORIGIN)
+        .expect(200);
+
+      expect(Object.keys(response.body).sort()).toEqual(
+        [
+          'name',
+          'slug',
+          'timezone',
+          'currency',
+          'address',
+          'contactPhone',
+          'contactEmail',
+          'cancellationPolicy',
+          'usagePolicy',
+          'rules',
+        ].sort(),
+      );
+      expect(response.body).not.toHaveProperty('id');
+      expect(response.body).not.toHaveProperty('status');
+
+      const stored = await prisma.establishment.findUnique({
+        where: { id: own.id },
+      });
+      expect(response.body).toEqual({
+        name: stored?.name,
+        slug: stored?.slug,
+        timezone: stored?.timezone,
+        currency: stored?.currency,
+        address: stored?.address,
+        contactPhone: stored?.contactPhone,
+        contactEmail: stored?.contactEmail,
+        cancellationPolicy: stored?.cancellationPolicy,
+        usagePolicy: stored?.usagePolicy,
+        rules: stored?.rules,
+      });
+    });
+
+    it('la consulta pública responde 404 en sede suspendida o inexistente', async () => {
+      const suspendedResponse = await request(server())
+        .get(`/api/v1/public/establishments/${suspended.slug}`)
+        .set('Origin', ORIGIN)
+        .expect(404);
+      expect(suspendedResponse.body.code).toBe('ESTABLISHMENT_NOT_FOUND');
+
+      const missing = await request(server())
+        .get('/api/v1/public/establishments/no-existe-perfil')
+        .set('Origin', ORIGIN)
+        .expect(404);
+      expect(missing.body.code).toBe('ESTABLISHMENT_NOT_FOUND');
+    });
   });
 });
