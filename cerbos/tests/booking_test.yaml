@@ -1,0 +1,143 @@
+---
+name: "BookingSuite"
+description: "booking:read — permission map + scope (own / establishment / platform)"
+principals:
+  player_a:
+    id: "user_a"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        booking:read: "own"
+  player_b:
+    id: "user_b"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        booking:read: "own"
+  staff_e1:
+    id: "user_staff_e1"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        booking:read: "establishment"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  staff_e1_no_permissions:
+    id: "user_staff_e1_no_permissions"
+    roles: ["authenticated"]
+    attr:
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: false
+  platform_admin:
+    id: "user_admin"
+    roles: ["authenticated"]
+    attr:
+      permissions:
+        booking:read: "platform"
+      establishmentId: "E1"
+      membershipStatus: "active"
+      isPlatformAdmin: true
+  anonymous:
+    id: "anonymous"
+    roles: ["anonymous"]
+    attr: {}
+resources:
+  booking_a_e1:
+    id: "booking_a"
+    kind: "booking"
+    attr:
+      playerId: "user_a"
+      establishmentId: "E1"
+  booking_b_e1:
+    id: "booking_b"
+    kind: "booking"
+    attr:
+      playerId: "user_b"
+      establishmentId: "E1"
+  booking_b_e2:
+    id: "booking_b_e2"
+    kind: "booking"
+    attr:
+      playerId: "user_b"
+      establishmentId: "E2"
+tests:
+  - name: "player A can read own booking"
+    input:
+      principals: ["player_a"]
+      resources: ["booking_a_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "player_a"
+        resource: "booking_a_e1"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "player A cannot read player B booking"
+    input:
+      principals: ["player_a"]
+      resources: ["booking_b_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "player_a"
+        resource: "booking_b_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "staff E1 can read booking in E1"
+    input:
+      principals: ["staff_e1"]
+      resources: ["booking_a_e1", "booking_b_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "staff_e1"
+        resource: "booking_a_e1"
+        actions:
+          read: EFFECT_ALLOW
+      - principal: "staff_e1"
+        resource: "booking_b_e1"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "staff E1 cannot read booking in E2"
+    input:
+      principals: ["staff_e1"]
+      resources: ["booking_b_e2"]
+      actions: ["read"]
+    expected:
+      - principal: "staff_e1"
+        resource: "booking_b_e2"
+        actions:
+          read: EFFECT_DENY
+  - name: "platform admin can read any booking"
+    input:
+      principals: ["platform_admin"]
+      resources: ["booking_a_e1", "booking_b_e2"]
+      actions: ["read"]
+    expected:
+      - principal: "platform_admin"
+        resource: "booking_a_e1"
+        actions:
+          read: EFFECT_ALLOW
+      - principal: "platform_admin"
+        resource: "booking_b_e2"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "anonymous is denied"
+    input:
+      principals: ["anonymous"]
+      resources: ["booking_a_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "anonymous"
+        resource: "booking_a_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "authenticated principal without the permission is denied"
+    input:
+      principals: ["staff_e1_no_permissions"]
+      resources: ["booking_a_e1"]
+      actions: ["read"]
+    expected:
+      - principal: "staff_e1_no_permissions"
+        resource: "booking_a_e1"
+        actions:
+          read: EFFECT_DENY

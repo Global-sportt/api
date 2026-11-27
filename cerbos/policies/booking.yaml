@@ -1,0 +1,21 @@
+---
+apiVersion: "api.cerbos.dev/v1"
+resourcePolicy:
+  version: "default"
+  resource: "booking"
+  rules:
+    - actions: ["read"]
+      effect: EFFECT_ALLOW
+      roles: ["authenticated"]
+      condition:
+        match:
+          expr: |
+            has(request.principal.attr.permissions) &&
+            "booking:read" in request.principal.attr.permissions &&
+            (
+              request.principal.attr.permissions["booking:read"] == "platform" ||
+              (request.principal.attr.permissions["booking:read"] == "establishment" &&
+               request.principal.attr.establishmentId == request.resource.attr.establishmentId) ||
+              (request.principal.attr.permissions["booking:read"] == "own" &&
+               request.principal.id == request.resource.attr.playerId)
+            )

@@ -1,0 +1,28 @@
+---
+# Cerbos PDP local configuration (spike, Gate 0).
+# Start from the repository root:
+#   .tools/cerbos/cerbos server --config=apps/api/cerbos/config.yaml
+# Relative paths are resolved against the working directory.
+server:
+  httpListenAddr: "127.0.0.1:3592"
+  grpcListenAddr: "127.0.0.1:3593"
+
+storage:
+  driver: "disk"
+  disk:
+    directory: "apps/api/cerbos/policies"
+    watchForChanges: true
+
+audit:
+  enabled: true
+  backend: "file"
+  decisionLogsEnabled: true
+  file:
+    path: "apps/api/cerbos/audit/decision.log"
+    logRotation:
+      maxFileSizeMB: 10
+      maxFileAgeDays: 7
+      maxFileCount: 5
+
+telemetry:
+  disabled: true
