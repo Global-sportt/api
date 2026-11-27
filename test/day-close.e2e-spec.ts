@@ -626,9 +626,18 @@ describe('Cierre diario: totales, consulta y bloqueo operativo (e2e)', () => {
   });
 
   it('aísla la sede: otra sede no ve este cierre', async () => {
-    // El dueño de E2 no tiene membresía en E1.
+    // El dueño de E2 no tiene membresía en E1: el guard de tenant corta antes
+    // de leer el cierre (contrato global de la API para sedes ajenas).
     const crossTenant = await getDayClose(owner2.token, e1.id, day).expect(403);
     expect(crossTenant.body.code).toBe('TENANT_FORBIDDEN');
+
+    // Una sede inexistente no se distingue de un recurso inexistente: 404.
+    const unknown = await getDayClose(
+      admin.token,
+      '00000000-0000-4000-8000-000000000000',
+      day,
+    ).expect(404);
+    expect(unknown.body.code).toBe('ESTABLISHMENT_NOT_FOUND');
 
     // Plataforma sí puede consultar E2, que nunca se cerró: 404.
     const missing = await getDayClose(admin.token, e2.id, day).expect(404);
