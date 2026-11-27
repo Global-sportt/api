@@ -35,11 +35,27 @@ export interface TenantContext {
   id?: string | null;
 }
 
-/** Decision metadata attached to an allowed request (`request.authz`). */
+/** Decision metadata attached to the request (`request.authz`). */
 export interface AuthorizationDecision {
   resource: string;
   action: string;
   permission: string;
+  decision: 'allow' | 'deny';
+  /** Cerbos decision log correlation id, when the PDP returned it. */
+  cerbosCallId?: string;
+  /** Cerbos request id (the API request id is sent as `requestId`). */
+  requestId?: string;
+}
+
+/**
+ * Result of a single PDP decision. It keeps the boolean answer together with
+ * the correlation metadata so the PEP can attach `cerbosCallId` to request
+ * logs without caching decisions.
+ */
+export interface AuthorizationDecisionResult {
+  allowed: boolean;
+  cerbosCallId?: string;
+  requestId?: string;
 }
 
 /**
@@ -60,12 +76,26 @@ export interface PermissionResolver {
  * `authorization.service.ts`; tests provide a fake.
  */
 export interface AuthorizationService {
+  /**
+   * Boolean compatibility surface. Callers that do not need correlation can
+   * keep using `can`; the guard uses `decide` when available.
+   */
   can(
     principal: AuthorizedPrincipal,
     resourceKind: string,
     action: string,
     resource?: Record<string, unknown>,
+    requestId?: string,
   ): Promise<boolean>;
+
+  /** Optional richer decision used by the guard for audit correlation. */
+  decide?(
+    principal: AuthorizedPrincipal,
+    resourceKind: string,
+    action: string,
+    resource?: Record<string, unknown>,
+    requestId?: string,
+  ): Promise<AuthorizationDecisionResult>;
 
   plan(
     principal: AuthorizedPrincipal,

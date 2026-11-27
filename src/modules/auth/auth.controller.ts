@@ -18,6 +18,7 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
+import { AuthenticatedOnly } from '../../common/authz/authenticated-only.decorator';
 import { AppError } from '../../common/errors/app-error';
 import { AppLogger } from '../../common/logging/app-logger.service';
 import { requestMetadata } from '../../common/http/request-metadata';
@@ -176,6 +177,7 @@ export class AuthController {
     this.cookies.clearSessionCookies(res);
   }
 
+  @AuthenticatedOnly()
   @Post('logout-all')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(200)
@@ -195,6 +197,7 @@ export class AuthController {
     return result;
   }
 
+  @AuthenticatedOnly()
   @Get('me')
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: 'Perfil de la sesión actual' })
@@ -206,6 +209,7 @@ export class AuthController {
     return UserResponseDto.from(user);
   }
 
+  @AuthenticatedOnly()
   @Post('password/change')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(200)

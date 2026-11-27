@@ -1,4 +1,5 @@
 import type { MembershipStatus } from '@prisma/client';
+import type { AuthorizationDecision } from '../authz/authorization.types';
 
 export type AuthErrorCode = 'invalid_token' | 'expired_token';
 
@@ -30,6 +31,8 @@ declare global {
       principal?: AuthenticatedPrincipal;
       authError?: AuthErrorCode;
       tenant?: TenantRequestContext;
+      /** Cerbos decision metadata attached by `AuthorizationGuard`. */
+      authz?: AuthorizationDecision;
     }
   }
 }
