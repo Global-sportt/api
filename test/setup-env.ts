@@ -1,3 +1,5 @@
+import { assertTestDatabaseUrl } from '../src/config/test-database';
+
 /**
  * `@cerbos/orm-prisma` is CommonJS but imports the ESM-only `@cerbos/core`
  * package. Node 22 can require ESM natively, but Jest's module runtime cannot;
@@ -28,6 +30,10 @@ process.env.LOG_LEVEL = 'silent';
 process.env.DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   'postgresql://reservas:reservas@127.0.0.1:5432/reservas_test?schema=public';
+
+// F-13: the suites truncate business and auth tables. Abort before any Prisma
+// client is created if the URL does not target the dedicated test database.
+assertTestDatabaseUrl(process.env.DATABASE_URL);
 
 process.env.JWT_ACCESS_SECRET =
   'test-access-secret-0123456789-abcdefghijklmnopqrstuvwxyz';

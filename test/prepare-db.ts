@@ -1,5 +1,11 @@
 import './setup-env';
 import { execFileSync } from 'node:child_process';
+import { assertTestDatabaseUrl } from '../src/config/test-database';
+
+// setup-env already validated the URL, but prepare-db runs `migrate deploy` and
+// the seed before Jest starts; re-asserting here protects direct invocations.
+const databaseName = assertTestDatabaseUrl(process.env.DATABASE_URL);
+console.log(`[prepare-db] Base de datos de test verificada: ${databaseName}`);
 
 execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
   cwd: process.cwd(),
