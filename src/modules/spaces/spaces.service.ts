@@ -8,6 +8,9 @@ import {
 import { AppError } from '../../common/errors/app-error';
 import { isValidDateOnly } from '../../common/time/zoned-time';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { CreateSpaceDto } from './dto/create-space.dto';
+import type { ListSpacesQueryDto } from './dto/list-spaces-query.dto';
+import type { UpdateSpaceDto } from './dto/update-space.dto';
 import {
   slotOverlapsBookings,
   type BookingRange,
@@ -81,6 +84,8 @@ export interface SpaceListItem {
   sport: string | null;
   slotMinutes: number;
   bufferMinutes: number;
+  /** Fixed hourly rate in minor units, serialized as a decimal string. */
+  basePriceMinor: string | null;
   status: SpaceStatus;
   createdAt: string;
   updatedAt: string;
@@ -129,33 +134,162 @@ export class SpacesService {
     private readonly slots: SlotsService,
   ) {}
 
-  async listSpaces(establishmentId: string): Promise<SpaceListItem[]> {
+  async listSpaces(
+    establishmentId: string,
+    query: ListSpacesQueryDto = {},
+  ): Promise<SpaceListItem[]> {
     await this.requireEstablishment(establishmentId);
 
+    const where: Prisma.SpaceWhereInput = { establishmentId };
+    if (query.status) {
+      where.status = query.status;
+    }
+    const sport = query.sport?.trim();
+    if (sport) {
+      // Case-insensitive filter: PostgreSQL `mode: 'insensitive'`.
+      where.sport = { equals: sport, mode: 'insensitive' };
+    }
+
     const spaces = await this.prisma.space.findMany({
-      where: { establishmentId },
+      where,
       orderBy: [{ status: 'asc' }, { name: 'asc' }],
       include: {
         operatingHours: { orderBy: { dayOfWeek: 'asc' } },
       },
     });
 
-    return spaces.map((space) => ({
-      id: space.id,
-      name: space.name,
-      slug: space.slug,
-      sport: space.sport,
-      slotMinutes: space.slotMinutes,
-      bufferMinutes: space.bufferMinutes,
-      status: space.status,
-      createdAt: space.createdAt.toISOString(),
-      updatedAt: space.updatedAt.toISOString(),
-      operatingHours: space.operatingHours.map((hour) => ({
-        dayOfWeek: hour.dayOfWeek,
-        opensAtMinutes: hour.opensAtMinutes,
-        closesAtMinutes: hour.closesAtMinutes,
-      })),
-    }));
+    return spaces.map((space) => toSpaceListItem(space));
+  }
+
+  /**
+   * Creates a space inside the establishment. The slug is generated from the
+   * name when omitted and is unique per establishment; the database unique
+   * index is the concurrency authority and a collision is reported as 409.
+   */
+  async createSpace(
+    establishmentId: string,
+    dto: CreateSpaceDto,
+  ): Promise<SpaceListItem> {
+    await this.requireEstablishment(establishmentId);
+
+    const name = dto.name.trim();
+    if (!name) {
+      throw validationError('name', 'El nombre de la cancha es obligatorio.');
+    }
+
+    const sport = dto.sport.trim();
+    if (!sport) {
+      throw validationError('sport', 'El tipo de deporte es obligatorio.');
+    }
+
+    const slug = dto.slug ?? slugifySpaceName(name);
+    if (!slug) {
+      throw validationError(
+        'slug',
+        'No se pudo generar un slug desde el nombre; indica uno explícitamente.',
+      );
+    }
+
+    const existing = await this.prisma.space.findUnique({
+      where: { establishmentId_slug: { establishmentId, slug } },
+      select: { id: true },
+    });
+    if (existing) {
+      throw spaceSlugConflict(slug);
+    }
+
+    try {
+      const space = await this.prisma.space.create({
+        data: {
+          establishmentId,
+          name,
+          slug,
+          sport,
+          slotMinutes: dto.slotMinutes ?? 60,
+          bufferMinutes: dto.bufferMinutes ?? 0,
+          status: dto.status ?? SpaceStatus.active,
+          ...(dto.basePriceMinor !== undefined
+            ? { basePriceMinor: BigInt(dto.basePriceMinor) }
+            : {}),
+        },
+        include: {
+          operatingHours: { orderBy: { dayOfWeek: 'asc' } },
+        },
+      });
+
+      return toSpaceListItem(space);
+    } catch (error) {
+      // Two concurrent creates can pass the pre-check; the composite unique
+      // index decides and the loser gets the same conflict code.
+      if (isUniqueConstraintViolation(error)) {
+        throw spaceSlugConflict(slug);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Partial update of a space. Only fields present in the body change; the
+   * slug is immutable. Changing `status` (including to `maintenance`) never
+   * touches bookings: existing reservations stay visible in the tenant lists.
+   */
+  async updateSpace(
+    establishmentId: string,
+    spaceId: string,
+    dto: UpdateSpaceDto,
+  ): Promise<SpaceListItem> {
+    await this.requireEstablishment(establishmentId);
+
+    const data: Prisma.SpaceUpdateInput = {};
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) {
+        throw validationError('name', 'El nombre de la cancha es obligatorio.');
+      }
+      data.name = name;
+    }
+
+    if (dto.sport !== undefined) {
+      const sport = dto.sport.trim();
+      if (!sport) {
+        throw validationError('sport', 'El tipo de deporte es obligatorio.');
+      }
+      data.sport = sport;
+    }
+
+    if (dto.slotMinutes !== undefined) data.slotMinutes = dto.slotMinutes;
+    if (dto.bufferMinutes !== undefined) data.bufferMinutes = dto.bufferMinutes;
+    if (dto.basePriceMinor !== undefined) {
+      data.basePriceMinor = BigInt(dto.basePriceMinor);
+    }
+    if (dto.status !== undefined) data.status = dto.status;
+
+    if (Object.keys(data).length === 0) {
+      throw new AppError(
+        400,
+        'VALIDATION_ERROR',
+        'Debes indicar al menos un campo para actualizar.',
+      );
+    }
+
+    const space = await this.prisma.space.findFirst({
+      where: { id: spaceId, establishmentId },
+      select: { id: true },
+    });
+    if (!space) {
+      throw spaceNotFound();
+    }
+
+    const updated = await this.prisma.space.update({
+      where: { id: space.id },
+      data,
+      include: {
+        operatingHours: { orderBy: { dayOfWeek: 'asc' } },
+      },
+    });
+
+    return toSpaceListItem(updated);
   }
 
   async getAvailability(
@@ -367,6 +501,84 @@ export class SpacesService {
 
 function toDateOnlyDate(date: string): Date {
   return new Date(`${date}T00:00:00.000Z`);
+}
+
+type SpaceWithOperatingHours = Prisma.SpaceGetPayload<{
+  include: { operatingHours: true };
+}>;
+
+function toSpaceListItem(space: SpaceWithOperatingHours): SpaceListItem {
+  return {
+    id: space.id,
+    name: space.name,
+    slug: space.slug,
+    sport: space.sport,
+    slotMinutes: space.slotMinutes,
+    bufferMinutes: space.bufferMinutes,
+    basePriceMinor:
+      space.basePriceMinor === null || space.basePriceMinor === undefined
+        ? null
+        : space.basePriceMinor.toString(),
+    status: space.status,
+    createdAt: space.createdAt.toISOString(),
+    updatedAt: space.updatedAt.toISOString(),
+    operatingHours: space.operatingHours.map((hour) => ({
+      dayOfWeek: hour.dayOfWeek,
+      opensAtMinutes: hour.opensAtMinutes,
+      closesAtMinutes: hour.closesAtMinutes,
+    })),
+  };
+}
+
+/**
+ * Lowercase, accent-free, hyphen-separated slug. Shared with the create flow
+ * when the client omits `slug`.
+ */
+function slugifySpaceName(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+    .replace(/-+$/g, '');
+}
+
+function validationError(field: string, message: string): AppError {
+  return new AppError(400, 'VALIDATION_ERROR', message, [
+    { field, constraints: ['required'] },
+  ]);
+}
+
+function spaceSlugConflict(slug: string): AppError {
+  return new AppError(
+    409,
+    'SPACE_SLUG_CONFLICT',
+    `Ya existe una cancha con el slug "${slug}" en este establecimiento.`,
+    [{ field: 'slug', constraints: ['unique'] }],
+  );
+}
+
+function spaceNotFound(): AppError {
+  return new AppError(
+    404,
+    'SPACE_NOT_FOUND',
+    'La cancha no existe en este establecimiento.',
+  );
+}
+
+/**
+ * Prisma reports a composite unique violation as `P2002` regardless of which
+ * index fired. In `createSpace` the only unique index on the written columns
+ * is `(establishment_id, slug)`, so the mapping is unambiguous.
+ */
+function isUniqueConstraintViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === 'P2002'
+  );
 }
 
 function toSlotException(
