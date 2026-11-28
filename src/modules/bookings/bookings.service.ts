@@ -47,6 +47,7 @@ import {
 import type { CreateBookingDto } from './dto/create-booking.dto';
 import type { CreateTenantBookingDto } from './dto/create-tenant-booking.dto';
 import type { ListBookingsQueryDto } from './dto/list-bookings-query.dto';
+import { assertDayOpenForInstant } from './day-close.service';
 
 const bookingSelect = {
   id: true,
@@ -266,6 +267,13 @@ export class BookingsService {
       endsAtIso: times.endsAtIso,
     });
 
+    await assertDayOpenForInstant(
+      this.prisma,
+      resolved.establishmentId,
+      resolved.startsAt,
+      resolved.timezone,
+    );
+
     return this.insertBooking({
       actorId,
       playerId: actorId,
@@ -327,6 +335,13 @@ export class BookingsService {
       startsAtIso: times.startsAtIso,
       endsAtIso: times.endsAtIso,
     });
+
+    await assertDayOpenForInstant(
+      this.prisma,
+      establishmentId,
+      resolved.startsAt,
+      resolved.timezone,
+    );
 
     return this.insertBooking({
       actorId,
@@ -405,6 +420,7 @@ export class BookingsService {
 
     if (!row) throw bookingNotFound();
     await this.assertCanAccessOwnBooking(actorId, row, 'cancel');
+    await this.assertBookingDayOpen(row);
     assertCancellableByPlayer(row);
 
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -576,6 +592,7 @@ export class BookingsService {
 
     if (!row) throw bookingNotFound();
 
+    await this.assertBookingDayOpen(row);
     assertBookingTransition(row.status, targetStatus);
 
     if (
@@ -700,6 +717,27 @@ export class BookingsService {
   }
 
   /**
+   * Bloqueo operativo del cierre: mientras el día local de la reserva tenga un
+   * cierre vigente (no reabierto), no se puede crear, mover ni cancelar. La
+   * zona horaria se lee de la sede porque la reserva solo guarda el instante.
+   */
+  private async assertBookingDayOpen(row: BookingRow): Promise<void> {
+    const establishment = await this.prisma.establishment.findUnique({
+      where: { id: row.establishmentId },
+      select: { timezone: true },
+    });
+
+    if (!establishment) throw establishmentNotFound();
+
+    await assertDayOpenForInstant(
+      this.prisma,
+      row.establishmentId,
+      row.startsAt,
+      establishment.timezone,
+    );
+  }
+
+  /**
    * Generates T5 slots for the local date of `startsAt` and requires the exact
    * generated slot. Price and currency come only from that slot.
    */
@@ -721,6 +759,7 @@ export class BookingsService {
         establishmentId: true,
         slotMinutes: true,
         bufferMinutes: true,
+        basePriceMinor: true,
         status: true,
         establishment: {
           select: {
@@ -783,6 +822,7 @@ export class BookingsService {
         id: space.id,
         slotMinutes: space.slotMinutes,
         bufferMinutes: space.bufferMinutes,
+        basePriceMinor: space.basePriceMinor,
       },
       timezone,
       date: localDate,
