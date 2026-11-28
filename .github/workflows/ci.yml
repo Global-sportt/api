@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Un push nuevo a la misma rama/PR cancela la ejecución anterior. En push
+# directo a main/develop se dejan terminar todas las ejecuciones.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  quality:
+    name: Calidad
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: reservas
+          POSTGRES_PASSWORD: reservas
+          POSTGRES_DB: reservas_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U reservas -d reservas_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # e2e y prepare-db derivan DATABASE_URL de TEST_DATABASE_URL. Los tests
+      # unitarios se ejecutan sin DATABASE_URL ambiente, igual que en un
+      # checkout limpio; la verificación de deriva la define en su paso.
+      TEST_DATABASE_URL: postgresql://reservas:reservas@127.0.0.1:5432/reservas_test?schema=public
+      CERBOS_URL: http://127.0.0.1:3592
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # El repositorio de la API no versiona lockfile; por eso `npm install`
+      # en lugar de `npm ci`.
+      - name: Instalar dependencias
+        run: npm install --no-audit --no-fund
+
+      - name: Generar cliente Prisma
+        run: npx prisma generate
+
+      - name: Instalar Cerbos 0.58.0
+        run: |
+          set -euo pipefail
+          version="0.58.0"
+          archive="cerbos_${version}_Linux_x86_64.tar.gz"
+          base="https://github.com/cerbos/cerbos/releases/download/v${version}"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" "$base/$archive"
+          curl -fsSL -o "$RUNNER_TEMP/checksums.txt" "$base/checksums.txt"
+          (cd "$RUNNER_TEMP" && grep "  ${archive}\$" checksums.txt | sha256sum -c -)
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" cerbos
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/cerbos" --version
+
+      - name: Compilar políticas Cerbos
+        run: cerbos compile --tests=cerbos/tests cerbos/policies
+
+      - name: Arrancar PDP de Cerbos
+        run: |
+          set -euo pipefail
+          cerbos server --config=cerbos/config.ci.yaml > "$RUNNER_TEMP/cerbos.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/cerbos.pid"
+          for attempt in $(seq 1 30); do
+            if curl -fsS "$CERBOS_URL/_cerbos/health" > /dev/null; then
+              echo "Cerbos listo tras ${attempt}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/cerbos.log"
+          echo "::error::Cerbos no respondió en $CERBOS_URL"
+          exit 1
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Pruebas unitarias
+        run: npm test -- --runInBand
+
+      # `prepare-db` aplica `prisma migrate deploy` y el seed antes de Jest;
+      # con E2E_REAL_CERBOS=1 la matriz de autorización exige el PDP real.
+      - name: Pruebas e2e con Cerbos real
+        env:
+          E2E_REAL_CERBOS: '1'
+        run: npm run test:e2e
+
+      - name: Build
+        run: npm run build
+
+      # Las migraciones ya están aplicadas por `prepare-db` (e2e). El script
+      # falla ante cualquier diferencia no documentada en ADR-016.
+      - name: Verificar deriva de migraciones
+        run: DATABASE_URL="$TEST_DATABASE_URL" bash scripts/ci/check-migration-drift.sh

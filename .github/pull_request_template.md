@@ -1,21 +1,17 @@
 # Pull Request
 
-## Resumen
+## Rama
 
-<!-- Qué cambia, por qué y qué problema resuelve. -->
+`feature/<dominio-funcional>` — sin identificadores internos del plan.
 
-## Tipo
+## Objetivo
 
-- [ ] `feature/*`
-- [ ] `fix/*`
-- [ ] `hotfix/*`
+<!-- Qué problema resuelve y por qué ahora. -->
 
-## Rama y trazabilidad
+## Tareas
 
-- Rama:
-- Tarea externa:
-- Commits:
-- Base: `develop` <!-- `main` solo para hotfix o release -->
+- Refs: CU-<id>
+- Hito: <!-- enlace o nombre del hito -->
 
 ## Cambios
 
@@ -26,33 +22,26 @@
 | Comando | Resultado |
 |---|---|
 | `npm run typecheck` | |
-| `npm run lint --workspace=@reservas/api` | |
-| `npm test --workspace=@reservas/api -- --runInBand` | |
-| `E2E_REAL_CERBOS=1 npm run test:e2e --workspace=@reservas/api` | |
-| `cerbos compile ... --tests` | |
+| `npm run lint` | |
+| `npm test -- --runInBand` | |
+| `E2E_REAL_CERBOS=1 npm run test:e2e` | |
+| `cerbos compile cerbos --tests` | |
+| `npm run build` | |
+| `bash scripts/ci/check-migration-drift.sh` | |
 
 ## Evidencia
 
-<!-- Salidas reales, conteos, consultas, enlaces. No inventar resultados. -->
+<!-- Salidas reales, enlace del run de CI, consultas SQL. -->
 
-## Riesgos y residuales
+## Riesgos / residuales
 
 -
 
-## Aprobación independiente
-
-- [ ] El autor no aprobó este PR.
-- [ ] La aprobación es de un humano distinto del autor.
-- [ ] La aprobación **no** proviene de la cuenta `Dan1el71`.
-- [ ] A0 hizo revisión técnica, sin aprobar.
-- [ ] No se usaron bots, cuentas alternativas ni mecanismos equivalentes.
-- [ ] Si no hay revisor independiente, el PR queda abierto.
-
 ## Checklist
 
-- [ ] Rama creada desde `develop` (o `main` para hotfix), sin commits directos en `main`/`develop`.
-- [ ] Commits atómicos con Conventional Commits.
-- [ ] Sin secretos ni credenciales.
-- [ ] Migraciones revisadas y aplicadas.
-- [ ] Documentación y trazabilidad actualizadas.
-- [ ] No se modificó `main` ni se movió un tag de release.
+- [ ] Rama propia y commits atómicos con Conventional Commits
+- [ ] Sin secretos, sin servicios externos ni credenciales versionadas
+- [ ] Migraciones revisadas; deriva de esquema verificada
+- [ ] Typecheck, lint, unitarios, e2e con Cerbos real y build ejecutados
+- [ ] PR apunta a `develop` y está vinculado a la tarea de ClickUp
+- [ ] Aprobación independiente registrada (no autoaprobación)
