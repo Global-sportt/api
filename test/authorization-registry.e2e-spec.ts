@@ -48,6 +48,12 @@ describe('Authorization route registry (e2e)', () => {
     expectRoute(byRoute, 'POST /bookings', 'authorize', 'booking:create');
     expectRoute(
       byRoute,
+      'PATCH /admin/establishments/:id/status',
+      'authorize',
+      'establishment:suspend',
+    );
+    expectRoute(
+      byRoute,
       'GET /establishments/:id/spaces',
       'authorize',
       'space:read',

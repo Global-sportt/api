@@ -37,6 +37,7 @@ import {
   PublicEstablishmentResponseDto,
 } from './dto/establishment-response.dto';
 import { UpdateEstablishmentDto } from './dto/update-establishment.dto';
+import { UpdateEstablishmentStatusDto } from './dto/update-establishment-status.dto';
 import { UpdateMembershipDto } from './dto/update-membership.dto';
 import {
   EstablishmentsService,
@@ -70,6 +71,33 @@ export class AdminEstablishmentsController {
   @ApiOkResponse({ description: 'Listado de establecimientos' })
   list() {
     return this.establishments.list();
+  }
+
+  @Patch(':id/status')
+  @Authorize('establishment', 'suspend')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Suspender o reactivar un establecimiento (plataforma)',
+    description:
+      'Solo platform-admin. Transiciones permitidas: active -> suspended y suspended -> active. Repetir el estado actual responde 200 sin escribir; cualquier otra transición responde 409 INVALID_STATE. La suspensión no borra canchas, horarios ni reservas.',
+  })
+  @ApiOkResponse({ description: 'Establecimiento con su estado actualizado' })
+  @ApiResponse({ status: 400, description: 'status inválido o ausente.' })
+  @ApiResponse({
+    status: 403,
+    description: 'Sin permiso establishment:suspend.',
+  })
+  @ApiResponse({ status: 404, description: 'Establecimiento no encontrado.' })
+  @ApiResponse({
+    status: 409,
+    description: 'Transición de estado no permitida.',
+  })
+  changeStatus(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedPrincipal,
+    @Body() dto: UpdateEstablishmentStatusDto,
+  ) {
+    return this.establishments.changeStatus(user.userId, id, dto.status);
   }
 }
 

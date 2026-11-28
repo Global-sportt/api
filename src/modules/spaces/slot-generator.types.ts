@@ -9,6 +9,11 @@ export interface SlotSpaceConfig {
   id?: string;
   slotMinutes: number;
   bufferMinutes: number;
+  /**
+   * Fixed price of the space in minor units. It is the fallback used when no
+   * price rule covers a slot; `null`/`undefined` means 0.
+   */
+  basePriceMinor?: bigint | null;
 }
 
 export interface SlotOperatingHour {
