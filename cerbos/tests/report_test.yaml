@@ -67,6 +67,10 @@ resources:
     kind: "report"
     attr:
       establishmentId: "E2"
+  platform_dashboard:
+    id: "R_PLATFORM"
+    kind: "report"
+    attr: {}
 tests:
   - name: "owner E1 can read report E1"
     input:
@@ -136,5 +140,35 @@ tests:
     expected:
       - principal: "anonymous"
         resource: "report_e1"
+        actions:
+          read: EFFECT_DENY
+  - name: "platform admin can read the platform-wide report"
+    input:
+      principals: ["platform_admin"]
+      resources: ["platform_dashboard"]
+      actions: ["read"]
+    expected:
+      - principal: "platform_admin"
+        resource: "platform_dashboard"
+        actions:
+          read: EFFECT_ALLOW
+  - name: "owner cannot read the platform-wide report (no establishment resource)"
+    input:
+      principals: ["owner_e1"]
+      resources: ["platform_dashboard"]
+      actions: ["read"]
+    expected:
+      - principal: "owner_e1"
+        resource: "platform_dashboard"
+        actions:
+          read: EFFECT_DENY
+  - name: "player cannot read the platform-wide report"
+    input:
+      principals: ["player_a"]
+      resources: ["platform_dashboard"]
+      actions: ["read"]
+    expected:
+      - principal: "player_a"
+        resource: "platform_dashboard"
         actions:
           read: EFFECT_DENY
