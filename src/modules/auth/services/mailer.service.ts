@@ -11,6 +11,17 @@ interface MailInput {
   html: string;
 }
 
+/** Display-ready booking fields; the caller resolves timezone and currency. */
+export interface BookingEmailDetails {
+  publicCode: string;
+  establishmentName: string;
+  spaceName: string;
+  startsAt: string;
+  amount: string;
+  address?: string | null;
+  cancellationPolicy?: string | null;
+}
+
 @Injectable()
 export class MailerService {
   private readonly transporter: Transporter | null;
@@ -65,6 +76,74 @@ export class MailerService {
         'El enlace vence en 1 hora. Si no lo solicitaste, ignora este mensaje.',
       ),
     });
+  }
+
+  async sendBookingCreatedEmail(
+    to: string,
+    details: BookingEmailDetails,
+  ): Promise<void> {
+    const rows = this.bookingRows(details);
+    await this.send({
+      to,
+      subject: `Reserva confirmada · ${details.publicCode}`,
+      text: [
+        'Tu reserva quedó registrada.',
+        '',
+        ...rows.map(([label, value]) => `${label}: ${value}`),
+        '',
+        'Conserva este correo como comprobante de tu reserva.',
+      ].join('\n'),
+      html: this.bookingLayout(
+        'Reserva confirmada',
+        'Tu reserva quedó registrada con estos datos.',
+        rows,
+        'Conserva este correo como comprobante de tu reserva.',
+      ),
+    });
+  }
+
+  async sendBookingCancelledEmail(
+    to: string,
+    details: BookingEmailDetails,
+  ): Promise<void> {
+    const rows = this.bookingRows(details);
+    await this.send({
+      to,
+      subject: `Reserva cancelada · ${details.publicCode}`,
+      text: [
+        'Tu reserva fue cancelada.',
+        '',
+        ...rows.map(([label, value]) => `${label}: ${value}`),
+        '',
+        'Si tienes dudas sobre la cancelación, contacta al establecimiento.',
+      ].join('\n'),
+      html: this.bookingLayout(
+        'Reserva cancelada',
+        'Tu reserva fue cancelada con estos datos.',
+        rows,
+        'Si tienes dudas sobre la cancelación, contacta al establecimiento.',
+      ),
+    });
+  }
+
+  private bookingRows(
+    details: BookingEmailDetails,
+  ): Array<[string, string]> {
+    const rows: Array<[string, string]> = [
+      ['Código', details.publicCode],
+      ['Espacio', details.spaceName],
+      ['Sede', details.establishmentName],
+      ['Fecha y hora', details.startsAt],
+      ['Valor', details.amount],
+    ];
+
+    const address = details.address?.trim();
+    if (address) rows.push(['Dirección', address]);
+
+    const policy = details.cancellationPolicy?.trim();
+    if (policy) rows.push(['Política de cancelación', policy]);
+
+    return rows;
   }
 
   private async send(input: MailInput): Promise<void> {
@@ -136,6 +215,44 @@ export class MailerService {
     footer: string,
   ): string {
     const safeUrl = this.escapeHtml(url);
+    return this.shell(
+      title,
+      intro,
+      `            <a href="${safeUrl}" style="display:inline-block;background:#14532d;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:10px;font-weight:bold">${this.escapeHtml(button)}</a>
+            <p style="font-size:11px;line-height:1.6;color:#7b8a80;margin:16px 0 0;word-break:break-all">${safeUrl}</p>`,
+      footer,
+    );
+  }
+
+  private bookingLayout(
+    title: string,
+    intro: string,
+    rows: Array<[string, string]>,
+    footer: string,
+  ): string {
+    const body = rows
+      .map(
+        ([label, value]) =>
+          `            <tr><td style="padding:8px 12px 8px 0;font-size:13px;color:#5b6b60;vertical-align:top">${this.escapeHtml(label)}</td><td style="padding:8px 0;font-size:14px;color:#14231a">${this.escapeHtml(value)}</td></tr>`,
+      )
+      .join('\n');
+
+    return this.shell(
+      title,
+      intro,
+      `            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 8px">
+${body}
+            </table>`,
+      footer,
+    );
+  }
+
+  private shell(
+    title: string,
+    intro: string,
+    body: string,
+    footer: string,
+  ): string {
     return `<!doctype html>
 <html lang="es">
   <body style="margin:0;padding:24px;background:#f4f6f3;font-family:Arial,sans-serif;color:#14231a">
@@ -145,9 +262,8 @@ export class MailerService {
           <tr><td>
             <h1 style="font-size:22px;margin:0 0 12px">${this.escapeHtml(title)}</h1>
             <p style="font-size:15px;line-height:1.6;margin:0 0 24px">${this.escapeHtml(intro)}</p>
-            <a href="${safeUrl}" style="display:inline-block;background:#14532d;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:10px;font-weight:bold">${this.escapeHtml(button)}</a>
+${body}
             <p style="font-size:12px;line-height:1.6;color:#5b6b60;margin:24px 0 0">${this.escapeHtml(footer)}</p>
-            <p style="font-size:11px;line-height:1.6;color:#7b8a80;margin:16px 0 0;word-break:break-all">${safeUrl}</p>
           </td></tr>
         </table>
       </td></tr>

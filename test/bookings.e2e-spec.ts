@@ -14,6 +14,10 @@ import {
   type QueryPlan,
 } from '../src/common/authz/authorization.types';
 import { wallClockToUtc } from '../src/common/time/zoned-time';
+import {
+  MailerService,
+  type BookingEmailDetails,
+} from '../src/modules/auth/services/mailer.service';
 import { BookingsExpiryService } from '../src/modules/bookings/bookings-expiry.service';
 import { computeBookingRequestHash } from '../src/modules/bookings/booking-idempotency';
 import { pgSqlState } from '../src/modules/bookings/booking-errors';
@@ -123,6 +127,57 @@ function scopedPdp(): AuthorizationService {
       return { kind: PLAN_KIND.ALWAYS_DENIED };
     },
   };
+}
+
+interface SentBookingEmail {
+  kind: 'created' | 'cancelled';
+  to: string;
+  details: BookingEmailDetails;
+}
+
+/** Records booking emails so the suite can assert delivery without SMTP. */
+const sentBookingEmails: SentBookingEmail[] = [];
+let failNextBookingEmail = false;
+
+const mailerDouble = {
+  async sendVerificationEmail(): Promise<void> {},
+  async sendPasswordResetEmail(): Promise<void> {},
+  async sendBookingCreatedEmail(
+    to: string,
+    details: BookingEmailDetails,
+  ): Promise<void> {
+    if (failNextBookingEmail) {
+      failNextBookingEmail = false;
+      throw new Error('SMTP no disponible');
+    }
+    sentBookingEmails.push({ kind: 'created', to, details });
+  },
+  async sendBookingCancelledEmail(
+    to: string,
+    details: BookingEmailDetails,
+  ): Promise<void> {
+    sentBookingEmails.push({ kind: 'cancelled', to, details });
+  },
+};
+
+async function waitForEmail(
+  predicate: (email: SentBookingEmail) => boolean,
+): Promise<SentBookingEmail> {
+  const deadline = Date.now() + 5_000;
+
+  for (;;) {
+    const match = sentBookingEmails.find(predicate);
+    if (match) return match;
+    if (Date.now() > deadline) {
+      throw new Error('Timeout esperando el correo de la reserva');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+/** Notifications are fire-and-forget: give them a bounded window. */
+async function settleNotifications(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 300));
 }
 
 let app: INestApplication;
@@ -395,6 +450,7 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
   const day2 = localDate(2);
   const day3 = localDate(3);
   const day4 = localDate(4);
+  const day5 = localDate(5);
   const pastDay = localDate(-1);
 
   beforeAll(async () => {
@@ -405,6 +461,11 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
         .overrideProvider(AUTHORIZATION_SERVICE)
         .useValue(scopedPdp());
     }
+
+    // Booking emails are asserted through a recording double; no SMTP needed.
+    builder.overrideProvider(MailerService).useValue(mailerDouble);
+    sentBookingEmails.length = 0;
+    failNextBookingEmail = false;
 
     const moduleRef = await builder.compile();
     app = moduleRef.createNestApplication();
@@ -1231,5 +1292,188 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
     const tenantIds = (tenant.body as BookingBody[]).map((booking) => booking.id);
     expect(tenantIds).toContain(foreign.id);
     expect(tenantIds).toContain(ownId);
+  });
+
+  describe('notificaciones de reserva', () => {
+    function formatExpectedStart(startsAt: string): string {
+      return new Intl.DateTimeFormat('es-CO', {
+        timeZone: TIMEZONE,
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      }).format(new Date(startsAt));
+    }
+
+    it('una reserva propia nueva encola el correo de confirmación', async () => {
+      const slot = slotAt(day5, 9);
+      const created = await createOwnBooking(playerA.token, s1, slot).expect(201);
+      const publicCode = created.body.publicCode as string;
+
+      const email = await waitForEmail(
+        (candidate) =>
+          candidate.kind === 'created' &&
+          candidate.details.publicCode === publicCode,
+      );
+
+      expect(email.to).toBe(playerA.email.toLowerCase());
+      expect(email.details).toEqual({
+        publicCode,
+        establishmentName: 'E2E Booking Norte',
+        spaceName: 'Cancha 1',
+        startsAt: formatExpectedStart(slot.startsAt),
+        amount: '$\u00a025.000',
+        address: null,
+        cancellationPolicy: null,
+      });
+      // Bogotá wall clock, not the UTC instant of the slot.
+      expect(email.details.startsAt).toContain('09:00');
+    });
+
+    it('una reserva creada por el establecimiento notifica al jugador y su cancelación también', async () => {
+      const slot = slotAt(day5, 10);
+      const created = await createTenantBooking(
+        staff1.token,
+        e1.id,
+        s1,
+        playerB.userId,
+        slot,
+      ).expect(201);
+      const bookingId = created.body.id as string;
+      const publicCode = created.body.publicCode as string;
+
+      const createdEmail = await waitForEmail(
+        (candidate) =>
+          candidate.kind === 'created' &&
+          candidate.details.publicCode === publicCode,
+      );
+      expect(createdEmail.to).toBe(playerB.email.toLowerCase());
+
+      const cancelled = await bearer(
+        request(server())
+          .patch(`/api/v1/establishments/${e1.id}/bookings/${bookingId}/status`)
+          .send({ status: 'cancelled' }),
+        staff1.token,
+      ).expect(200);
+      expect(cancelled.body.status).toBe(BookingStatus.cancelled);
+
+      const cancelledEmail = await waitForEmail(
+        (candidate) =>
+          candidate.kind === 'cancelled' &&
+          candidate.details.publicCode === publicCode,
+      );
+      expect(cancelledEmail.to).toBe(playerB.email.toLowerCase());
+    });
+
+    it('cancelar una reserva propia encola el correo de cancelación', async () => {
+      const slot = slotAt(day5, 11);
+      const created = await createOwnBooking(playerA.token, s1, slot).expect(201);
+      const bookingId = created.body.id as string;
+      const publicCode = created.body.publicCode as string;
+
+      await waitForEmail(
+        (candidate) =>
+          candidate.kind === 'created' &&
+          candidate.details.publicCode === publicCode,
+      );
+
+      await bearer(
+        request(server()).post(`/api/v1/me/bookings/${bookingId}/cancel`),
+        playerA.token,
+      ).expect(200);
+
+      const email = await waitForEmail(
+        (candidate) =>
+          candidate.kind === 'cancelled' &&
+          candidate.details.publicCode === publicCode,
+      );
+      expect(email.to).toBe(playerA.email.toLowerCase());
+    });
+
+    it('el replay idempotente no envía un segundo correo', async () => {
+      const slot = slotAt(day5, 12);
+      const key = `K-NOTIF-${Date.now()}`;
+
+      const first = await createOwnBooking(playerA.token, s1, slot, key).expect(201);
+      const publicCode = first.body.publicCode as string;
+
+      await waitForEmail(
+        (candidate) =>
+          candidate.kind === 'created' &&
+          candidate.details.publicCode === publicCode,
+      );
+      const beforeReplay = sentBookingEmails.filter(
+        (candidate) => candidate.details.publicCode === publicCode,
+      ).length;
+      expect(beforeReplay).toBe(1);
+
+      const replay = await createOwnBooking(playerA.token, s1, slot, key).expect(200);
+      expect(replay.body.id).toBe(first.body.id);
+
+      await settleNotifications();
+      expect(
+        sentBookingEmails.filter(
+          (candidate) => candidate.details.publicCode === publicCode,
+        ),
+      ).toHaveLength(beforeReplay);
+    });
+
+    it('un fallo del mailer se registra y no rompe la reserva', async () => {
+      await settleNotifications();
+      const logger = app.get(AppLogger);
+      const errorSpy = jest.spyOn(logger.raw, 'error');
+
+      try {
+        failNextBookingEmail = true;
+        const created = await createOwnBooking(
+          playerA.token,
+          s1,
+          slotAt(day5, 13),
+        ).expect(201);
+        const bookingId = created.body.id as string;
+        const publicCode = created.body.publicCode as string;
+
+        const deadline = Date.now() + 5_000;
+        let failure: unknown;
+        while (Date.now() < deadline && !failure) {
+          failure = errorSpy.mock.calls.find(([entry]) => {
+            const candidate = entry as { event?: string; bookingId?: string };
+            return (
+              candidate.event === 'booking_notification_failed' &&
+              candidate.bookingId === bookingId
+            );
+          });
+          if (!failure) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        }
+
+        expect(failure).toEqual([
+          expect.objectContaining({
+            event: 'booking_notification_failed',
+            bookingId,
+            notification: 'created',
+            errorName: 'Error',
+          }),
+          'booking_notification_failed',
+        ]);
+
+        const stored = await prisma.booking.findUnique({
+          where: { id: bookingId },
+        });
+        expect(stored?.status).toBe(BookingStatus.confirmed);
+        expect(stored?.publicCode).toBe(publicCode);
+        expect(
+          sentBookingEmails.some(
+            (candidate) => candidate.details.publicCode === publicCode,
+          ),
+        ).toBe(false);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
   });
 });

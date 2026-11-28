@@ -27,6 +27,7 @@ import {
   computeBookingRequestHash,
   normalizeIdempotencyKey,
 } from './booking-idempotency';
+import { BookingNotificationsService } from './booking-notifications.service';
 import {
   assertBookingTransition,
   replayErrorForBooking,
@@ -141,6 +142,7 @@ export class BookingsService {
     @Inject(AUTHORIZATION_SERVICE)
     private readonly authorization: AuthorizationService,
     private readonly logger: AppLogger,
+    private readonly notifications: BookingNotificationsService,
   ) {}
 
   /**
@@ -192,7 +194,7 @@ export class BookingsService {
       resolved.timezone,
     );
 
-    return this.insertBooking({
+    const result = await this.insertBooking({
       actorId,
       playerId: actorId,
       establishmentId: resolved.establishmentId,
@@ -205,6 +207,13 @@ export class BookingsService {
       requestHash,
       resolved,
     });
+
+    // Only a real insert triggers the email; idempotent replays stay silent.
+    if (!result.replay) {
+      void this.notifications.notifyCreated(result.booking.id);
+    }
+
+    return result;
   }
 
   /**
@@ -261,7 +270,7 @@ export class BookingsService {
       resolved.timezone,
     );
 
-    return this.insertBooking({
+    const result = await this.insertBooking({
       actorId,
       playerId: dto.playerId,
       establishmentId,
@@ -274,6 +283,13 @@ export class BookingsService {
       requestHash,
       resolved,
     });
+
+    // Only a real insert triggers the email; idempotent replays stay silent.
+    if (!result.replay) {
+      void this.notifications.notifyCreated(result.booking.id);
+    }
+
+    return result;
   }
 
   /**
@@ -375,6 +391,8 @@ export class BookingsService {
       status: updated.status,
     });
 
+    void this.notifications.notifyCancelled(updated.id);
+
     return toBookingResponse(updated);
   }
 
@@ -473,6 +491,10 @@ export class BookingsService {
       fromStatus: row.status,
       toStatus: updated.status,
     });
+
+    if (updated.status === BookingStatus.cancelled) {
+      void this.notifications.notifyCancelled(updated.id);
+    }
 
     return toBookingResponse(updated);
   }

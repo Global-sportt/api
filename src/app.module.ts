@@ -24,6 +24,7 @@ import { AuthzModule } from './common/authz/authz.module';
 import { EstablishmentsModule } from './modules/establishments/establishments.module';
 import { SpacesModule } from './modules/spaces/spaces.module';
 import { BookingsModule } from './modules/bookings/bookings.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { BookingsModule } from './modules/bookings/bookings.module';
     EstablishmentsModule,
     SpacesModule,
     BookingsModule,
+    DashboardModule,
   ],
   providers: [
     {
