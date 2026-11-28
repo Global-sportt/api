@@ -18,6 +18,10 @@ import type { TenantRequestContext } from '../../common/types/express';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { AddMembershipDto } from './dto/add-membership.dto';
 import type { CreateEstablishmentDto } from './dto/create-establishment.dto';
+import {
+  ESTABLISHMENT_LIFECYCLE_STATUSES,
+  type EstablishmentLifecycleStatus,
+} from './dto/update-establishment-status.dto';
 import type { UpdateMembershipDto } from './dto/update-membership.dto';
 
 const establishmentSelect = {
@@ -267,6 +271,80 @@ export class EstablishmentsService {
     }
 
     return establishment;
+  }
+
+  /**
+   * Platform lifecycle: `active <-> suspended`.
+   *
+   * The establishment row is locked while the current state is read and the
+   * new one is written, so two concurrent requests cannot both observe the
+   * same source state. Repeating the current state is a 200 no-op (no write
+   * and no `status_changed` audit entry); every other transition, including
+   * any source state other than active/suspended, is a 409 INVALID_STATE.
+   * Only the `status` column changes: spaces, schedules and bookings are
+   * deliberately untouched so history and availability data survive.
+   */
+  async changeStatus(
+    actorId: string,
+    establishmentId: string,
+    status: EstablishmentStatus,
+  ): Promise<EstablishmentSummary> {
+    if (!isLifecycleStatus(status)) {
+      throw new AppError(
+        400,
+        'VALIDATION_ERROR',
+        'status debe ser active o suspended.',
+        [{ field: 'status', constraints: ['isIn'] }],
+      );
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      await lockEstablishment(tx, establishmentId);
+
+      const current = await tx.establishment.findUnique({
+        where: { id: establishmentId },
+        select: establishmentSelect,
+      });
+
+      if (!current) {
+        throw new AppError(
+          404,
+          'ESTABLISHMENT_NOT_FOUND',
+          'El establecimiento no existe.',
+        );
+      }
+
+      if (current.status === status) {
+        return { establishment: current, from: current.status, changed: false };
+      }
+
+      if (!isAllowedStatusTransition(current.status, status)) {
+        throw new AppError(
+          409,
+          'INVALID_STATE',
+          `No se puede cambiar el estado de "${current.status}" a "${status}".`,
+        );
+      }
+
+      const updated = await tx.establishment.update({
+        where: { id: establishmentId },
+        data: { status },
+        select: establishmentSelect,
+      });
+
+      return { establishment: updated, from: current.status, changed: true };
+    });
+
+    if (result.changed) {
+      this.audit('establishment.status_changed', {
+        actorId,
+        establishmentId,
+        from: result.from,
+        to: status,
+      });
+    }
+
+    return result.establishment;
   }
 
   async listMemberships(
@@ -722,6 +800,27 @@ async function assertNotLastOwner(
       'No se puede quitar o degradar al último owner activo del establecimiento.',
     );
   }
+}
+
+function isLifecycleStatus(
+  status: EstablishmentStatus,
+): status is EstablishmentLifecycleStatus {
+  return (ESTABLISHMENT_LIFECYCLE_STATUSES as readonly string[]).includes(
+    status,
+  );
+}
+
+/** The only two transitions accepted by the lifecycle endpoint. */
+function isAllowedStatusTransition(
+  from: EstablishmentStatus,
+  to: EstablishmentLifecycleStatus,
+): boolean {
+  return (
+    (from === EstablishmentStatus.active &&
+      to === EstablishmentStatus.suspended) ||
+    (from === EstablishmentStatus.suspended &&
+      to === EstablishmentStatus.active)
+  );
 }
 
 function membershipNotFound(): AppError {
