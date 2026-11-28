@@ -207,6 +207,114 @@ describe('generateSlots', () => {
     ]);
   });
 
+  it('desempata por la regla específica del día cuando prioridad y franja coinciden', () => {
+    const slots = generateSlots(
+      baseInput({
+        priceRules: [
+          {
+            id: 'every-day',
+            dayOfWeek: null,
+            startsAtMinutes: 9 * 60,
+            endsAtMinutes: 12 * 60,
+            amountMinor: 10_000n,
+            currency: 'COP',
+            priority: 5,
+          },
+          {
+            id: 'monday',
+            dayOfWeek: 1,
+            startsAtMinutes: 9 * 60,
+            endsAtMinutes: 12 * 60,
+            amountMinor: 14_000n,
+            currency: 'COP',
+            priority: 5,
+          },
+        ],
+      }),
+    );
+
+    expect(slots.map((slot) => slot.priceMinor)).toEqual([
+      '14000',
+      '14000',
+      '14000',
+    ]);
+  });
+
+  it('usa la tarifa fija del espacio cuando ninguna regla cubre la franja', () => {
+    const slots = generateSlots(
+      baseInput({
+        space: {
+          id: 'space-1',
+          slotMinutes: 60,
+          bufferMinutes: 0,
+          basePriceMinor: 120_000n,
+        },
+        priceRules: [
+          {
+            id: 'peak',
+            dayOfWeek: 1,
+            startsAtMinutes: 10 * 60,
+            endsAtMinutes: 11 * 60,
+            amountMinor: 18_000n,
+            currency: 'COP',
+            priority: 0,
+          },
+        ],
+      }),
+    );
+
+    expect(slots.map((slot) => slot.priceMinor)).toEqual([
+      '120000',
+      '18000',
+      '120000',
+    ]);
+  });
+
+  it('usa 0 cuando no hay regla aplicable ni tarifa fija', () => {
+    const slots = generateSlots(
+      baseInput({
+        space: {
+          id: 'space-1',
+          slotMinutes: 60,
+          bufferMinutes: 0,
+          basePriceMinor: null,
+        },
+      }),
+    );
+
+    expect(slots.map((slot) => slot.priceMinor)).toEqual(['0', '0', '0']);
+  });
+
+  it('ignora las reglas de otro día y aplica la tarifa fija', () => {
+    const slots = generateSlots(
+      baseInput({
+        space: {
+          id: 'space-1',
+          slotMinutes: 60,
+          bufferMinutes: 0,
+          basePriceMinor: 90_000n,
+        },
+        priceRules: [
+          {
+            id: 'tuesday-only',
+            dayOfWeek: 2,
+            startsAtMinutes: 9 * 60,
+            endsAtMinutes: 12 * 60,
+            amountMinor: 20_000n,
+            currency: 'COP',
+            priority: 10,
+          },
+        ],
+      }),
+    );
+
+    expect(slots.map((slot) => slot.priceMinor)).toEqual([
+      '90000',
+      '90000',
+      '90000',
+    ]);
+  });
+
   it('no genera una franja que no cabe completa antes del cierre', () => {
     const slots = generateSlots(
       baseInput({

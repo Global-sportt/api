@@ -32,6 +32,8 @@ interface OpeningWindow {
  * - Price rules apply only when the complete slot lies inside the rule range.
  *   The winner is the highest priority; ties prefer the lower start minute,
  *   then the lower end minute, then a day-specific rule, then the lower id.
+ * - A slot not covered by any rule is priced with the space fixed rate
+ *   (`basePriceMinor`); when that is null the price is 0.
  * - Local wall-clock times are converted to UTC with IANA rules. A start that
  *   falls in a spring-forward gap is skipped; ambiguous fall-back times use the
  *   earlier occurrence.
@@ -98,6 +100,7 @@ export function generateSlots(
         startsAtMinutes,
         endsAtMinutes,
         input.currency,
+        input.space.basePriceMinor,
       );
       const slot: GeneratedSlot = {
         startsAt,
@@ -177,6 +180,7 @@ function selectPrice(
   startsAtMinutes: number,
   endsAtMinutes: number,
   fallbackCurrency: string,
+  basePriceMinor: bigint | null | undefined,
 ): SelectedPrice {
   const applicable = rules.filter(
     (rule) =>
@@ -190,7 +194,7 @@ function selectPrice(
   const winner = applicable[0];
   return winner
     ? { amountMinor: winner.amountMinor, currency: winner.currency }
-    : { amountMinor: 0n, currency: fallbackCurrency };
+    : { amountMinor: basePriceMinor ?? 0n, currency: fallbackCurrency };
 }
 
 function comparePriceRules(left: SlotPriceRule, right: SlotPriceRule): number {
