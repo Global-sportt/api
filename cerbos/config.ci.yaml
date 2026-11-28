@@ -1,0 +1,21 @@
+# Configuración del PDP de Cerbos para CI.
+# Se arranca desde la raíz del repositorio de la API (donde `cerbos/` es un
+# directorio de primer nivel) para que las rutas relativas de abajo resuelvan:
+#   cerbos server --config=cerbos/config.ci.yaml
+server:
+  httpListenAddr: "127.0.0.1:3592"
+  grpcListenAddr: "127.0.0.1:3593"
+
+storage:
+  driver: "disk"
+  disk:
+    directory: "cerbos/policies"
+    watchForChanges: false
+
+# CI no persiste logs de auditoría: el PDP es efímero y los tests solo
+# necesitan decisiones, no un rastro en disco.
+audit:
+  enabled: false
+
+telemetry:
+  disabled: true

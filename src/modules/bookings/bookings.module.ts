@@ -10,6 +10,7 @@ import { BookingNotificationsService } from './booking-notifications.service';
 import { BookingsExpiryService } from './bookings-expiry.service';
 import {
   BookingsController,
+  EstablishmentAgendaController,
   EstablishmentBookingsController,
   MyBookingsController,
 } from './bookings.controller';
@@ -23,6 +24,7 @@ import { DayCloseService } from './day-close.service';
     BookingsController,
     MyBookingsController,
     EstablishmentBookingsController,
+    EstablishmentAgendaController,
     DayCloseController,
   ],
   providers: [

@@ -31,6 +31,7 @@ import {
   IDEMPOTENT_REPLAY_HEADER,
 } from './booking.constants';
 import { BookingsService } from './bookings.service';
+import { AgendaQueryDto } from './dto/agenda-query.dto';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { CreateTenantBookingDto } from './dto/create-tenant-booking.dto';
 import { ListBookingsQueryDto } from './dto/list-bookings-query.dto';
@@ -194,6 +195,30 @@ export class EstablishmentBookingsController {
       bookingId,
       dto.status,
     );
+  }
+}
+
+@ApiTags('bookings')
+@ApiBearerAuth()
+@Controller('establishments/:establishmentId/agenda')
+@UseGuards(TenantGuard, AuthorizationGuard)
+export class EstablishmentAgendaController {
+  constructor(private readonly bookings: BookingsService) {}
+
+  @Get()
+  @Authorize('booking', 'read')
+  @ApiOperation({
+    summary: 'Agenda diaria del establecimiento',
+    description:
+      'Agrupa las reservas por cancha para la fecha local del establecimiento. Incluye todas las canchas, también las que no tienen reservas, y totales por estado.',
+  })
+  @ApiOkResponse({ description: 'Agenda del día agrupada por cancha.' })
+  agenda(
+    @CurrentUser() user: AuthenticatedPrincipal,
+    @Param('establishmentId', new ParseUUIDPipe()) establishmentId: string,
+    @Query() query: AgendaQueryDto,
+  ) {
+    return this.bookings.getAgenda(user.userId, establishmentId, query.date);
   }
 }
 

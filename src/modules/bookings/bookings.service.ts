@@ -18,6 +18,7 @@ import { AppError } from '../../common/errors/app-error';
 import { AppLogger } from '../../common/logging/app-logger.service';
 import {
   getZonedDateTimeParts,
+  isValidDateOnly,
   wallClockToUtc,
 } from '../../common/time/zoned-time';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -69,6 +70,42 @@ const bookingSelect = {
 } satisfies Prisma.BookingSelect;
 
 type BookingRow = Prisma.BookingGetPayload<{ select: typeof bookingSelect }>;
+
+/**
+ * Agenda rows only need the fields the daily operation screen renders. The
+ * space is included so each booking carries its own reference even though the
+ * response also groups by space.
+ */
+const agendaBookingSelect = {
+  id: true,
+  publicCode: true,
+  spaceId: true,
+  startsAt: true,
+  endsAt: true,
+  status: true,
+  totalMinor: true,
+  currency: true,
+  player: {
+    select: {
+      id: true,
+      email: true,
+      profile: { select: { displayName: true } },
+    },
+  },
+  space: { select: { id: true, name: true, slug: true } },
+} satisfies Prisma.BookingSelect;
+
+type AgendaBookingRow = Prisma.BookingGetPayload<{
+  select: typeof agendaBookingSelect;
+}>;
+
+const AGENDA_REVENUE_STATUSES: ReadonlySet<BookingStatus> = new Set([
+  BookingStatus.confirmed,
+  BookingStatus.checked_in,
+  BookingStatus.completed,
+  BookingStatus.no_show,
+]);
+
 type PlanResourcesResponseShape = Parameters<
   typeof queryPlanToPrisma
 >[0]['queryPlan'];
@@ -102,6 +139,51 @@ export interface BookingActionResult {
   booking: BookingResponse;
   /** True when the result is the current state of a previous request. */
   replay: boolean;
+}
+
+export interface AgendaBooking {
+  id: string;
+  publicCode: string;
+  startsAt: string;
+  endsAt: string;
+  status: BookingStatus;
+  totalMinor: string;
+  currency: string;
+  player: {
+    id: string;
+    displayName: string | null;
+    email: string;
+  };
+  space: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+}
+
+export interface AgendaSpace {
+  id: string;
+  name: string;
+  slug: string;
+  bookings: AgendaBooking[];
+}
+
+export interface AgendaTotals {
+  bookings: number;
+  /**
+   * Sum of `totalMinor` for confirmed, checked_in, completed and no_show.
+   * Serialized as a string because the column is a `BigInt`.
+   */
+  revenueMinor: string;
+  byStatus: Record<BookingStatus, number>;
+}
+
+export interface AgendaResponse {
+  date: string;
+  timezone: string;
+  currency: string;
+  spaces: AgendaSpace[];
+  totals: AgendaTotals;
 }
 
 interface ResolvedSlot {
@@ -400,6 +482,10 @@ export class BookingsService {
    * Tenant list. The path establishment is ANDed with the Cerbos plan filter;
    * a staff/owner of another tenant never reaches this method (TenantGuard),
    * and platform-admin's ALWAYS_ALLOWED is still narrowed to the path.
+   *
+   * The optional `date` filter is interpreted as the local calendar day in the
+   * establishment timezone, so it matches the daily agenda boundaries. `/me`
+   * intentionally ignores it.
    */
   async listTenant(
     actorId: string,
@@ -409,6 +495,10 @@ export class BookingsService {
     const planFilter = await this.planFilter(actorId, establishmentId);
     if (planFilter === null) return [];
 
+    const day = query.date
+      ? await this.resolveEstablishmentDay(establishmentId, query.date)
+      : null;
+
     const rows = await this.prisma.booking.findMany({
       where: {
         AND: [
@@ -417,6 +507,9 @@ export class BookingsService {
           ...(query.playerId ? [{ playerId: query.playerId }] : []),
           ...(query.status ? [{ status: query.status }] : []),
           ...(query.spaceId ? [{ spaceId: query.spaceId }] : []),
+          ...(day
+            ? [{ startsAt: { gte: day.startsAt, lt: day.endsAt } }]
+            : []),
         ],
       },
       select: bookingSelect,
@@ -424,6 +517,80 @@ export class BookingsService {
     });
 
     return rows.map(toBookingResponse);
+  }
+
+  /**
+   * Daily agenda for the operations team.
+   *
+   * The day is the local calendar date in the establishment timezone: a
+   * booking at 23:30 local belongs to that date and never leaks into the next
+   * one, even when both instants fall on the same UTC day. Every space of the
+   * establishment is returned, including those without bookings, ordered by
+   * name; bookings inside a space are ordered by `startsAt`.
+   */
+  async getAgenda(
+    actorId: string,
+    establishmentId: string,
+    date: string,
+  ): Promise<AgendaResponse> {
+    const day = await this.resolveEstablishmentDay(establishmentId, date);
+    const planFilter = await this.planFilter(actorId, establishmentId);
+
+    // Fail closed: the route guard already requires `booking:read`, but a
+    // denied plan must never fall back to an unfiltered query.
+    if (planFilter === null) {
+      return {
+        date,
+        timezone: day.timezone,
+        currency: day.currency,
+        spaces: [],
+        totals: emptyAgendaTotals(),
+      };
+    }
+
+    const [spaces, rows] = await Promise.all([
+      this.prisma.space.findMany({
+        where: { establishmentId },
+        select: { id: true, name: true, slug: true },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      }),
+      this.prisma.booking.findMany({
+        where: {
+          AND: [
+            planFilter,
+            { establishmentId },
+            { startsAt: { gte: day.startsAt, lt: day.endsAt } },
+          ],
+        },
+        select: agendaBookingSelect,
+        orderBy: [{ startsAt: 'asc' }, { id: 'asc' }],
+      }),
+    ]);
+
+    const bySpace = new Map<string, AgendaBooking[]>();
+    for (const row of rows) {
+      const booking = toAgendaBooking(row);
+      const bucket = bySpace.get(row.spaceId);
+      if (bucket) bucket.push(booking);
+      else bySpace.set(row.spaceId, [booking]);
+    }
+
+    const agendaSpaces: AgendaSpace[] = spaces.map((space) => ({
+      id: space.id,
+      name: space.name,
+      slug: space.slug,
+      bookings: bySpace.get(space.id) ?? [],
+    }));
+
+    // Totals are computed from the bookings actually returned, so they always
+    // match the payload even if a row referenced a space outside the list.
+    return {
+      date,
+      timezone: day.timezone,
+      currency: day.currency,
+      spaces: agendaSpaces,
+      totals: computeAgendaTotals(agendaSpaces.flatMap((space) => space.bookings)),
+    };
   }
 
   /**
@@ -939,6 +1106,39 @@ export class BookingsService {
     });
   }
 
+  /**
+   * Resolves the local calendar day of an establishment to real UTC instants
+   * using the establishment timezone (DST included). A `YYYY-MM-DD` string
+   * that is not a real calendar date is a 400 before any query runs.
+   */
+  private async resolveEstablishmentDay(
+    establishmentId: string,
+    date: string,
+  ): Promise<{
+    timezone: string;
+    currency: string;
+    startsAt: Date;
+    endsAt: Date;
+  }> {
+    assertDateOnly(date);
+
+    const establishment = await this.prisma.establishment.findUnique({
+      where: { id: establishmentId },
+      select: { timezone: true, currency: true },
+    });
+
+    if (!establishment) throw establishmentNotFound();
+
+    return {
+      timezone: establishment.timezone,
+      currency: establishment.currency,
+      startsAt: wallClockToUtc(date, 0, establishment.timezone).instant,
+      // 1440 means midnight at the start of the next local day, so a 23:30
+      // booking stays inside this date and a 00:30 booking does not.
+      endsAt: wallClockToUtc(date, 1440, establishment.timezone).instant,
+    };
+  }
+
   private async planFilter(
     actorId: string,
     establishmentId: string | null,
@@ -1089,6 +1289,71 @@ function toBookingResponse(row: BookingRow): BookingResponse {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+function toAgendaBooking(row: AgendaBookingRow): AgendaBooking {
+  return {
+    id: row.id,
+    publicCode: row.publicCode,
+    startsAt: row.startsAt.toISOString(),
+    endsAt: row.endsAt.toISOString(),
+    status: row.status,
+    totalMinor: row.totalMinor.toString(),
+    currency: row.currency,
+    player: {
+      id: row.player.id,
+      displayName: row.player.profile?.displayName ?? null,
+      email: row.player.email,
+    },
+    space: {
+      id: row.space.id,
+      name: row.space.name,
+      slug: row.space.slug,
+    },
+  };
+}
+
+function emptyAgendaTotals(): AgendaTotals {
+  return {
+    bookings: 0,
+    revenueMinor: '0',
+    byStatus: Object.fromEntries(
+      Object.values(BookingStatus).map((status) => [status, 0]),
+    ) as Record<BookingStatus, number>,
+  };
+}
+
+/**
+ * Revenue counts only the statuses that represent money the venue keeps or
+ * expects: a cancelled/expired hold and a pending payment are excluded, while
+ * `no_show` still counts because the venue charges it. `byStatus` counts every
+ * returned booking, so the totals always reconcile with the payload.
+ */
+function computeAgendaTotals(bookings: AgendaBooking[]): AgendaTotals {
+  const totals = emptyAgendaTotals();
+  let revenueMinor = 0n;
+
+  for (const booking of bookings) {
+    totals.bookings += 1;
+    totals.byStatus[booking.status] += 1;
+    if (AGENDA_REVENUE_STATUSES.has(booking.status)) {
+      revenueMinor += BigInt(booking.totalMinor);
+    }
+  }
+
+  totals.revenueMinor = revenueMinor.toString();
+  return totals;
+}
+
+function assertDateOnly(date: string): void {
+  if (!isValidDateOnly(date)) {
+    throw new AppError(
+      400,
+      'VALIDATION_ERROR',
+      'date debe ser una fecha válida en formato YYYY-MM-DD.',
+      [{ field: 'date', constraints: ['isCalendarDate'] }],
+    );
+  }
 }
 
 function toDateOnly(parts: {
