@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
+import type { PaymentMethod } from '@prisma/client';
 import { AppError } from '../../common/errors/app-error';
 
-export const BOOKING_REQUEST_HASH_VERSION = 1;
+// v2: incluye el método de pago en la identidad canónica. Una clave usada con
+// otro método es una petición distinta y debe responder IDEMPOTENCY_KEY_REUSED.
+export const BOOKING_REQUEST_HASH_VERSION = 2;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 
 export interface BookingRequestIdentity {
@@ -10,6 +13,7 @@ export interface BookingRequestIdentity {
   playerId: string;
   startsAt: Date | string;
   endsAt: Date | string;
+  paymentMethod: PaymentMethod;
 }
 
 /**
@@ -28,6 +32,7 @@ export function canonicalBookingRequest(input: BookingRequestIdentity): string {
     playerId: input.playerId.toLowerCase(),
     startsAt: toUtcIso(input.startsAt),
     endsAt: toUtcIso(input.endsAt),
+    paymentMethod: input.paymentMethod,
   };
 
   return JSON.stringify(payload, Object.keys(payload).sort());

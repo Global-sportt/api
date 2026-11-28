@@ -5,6 +5,7 @@ import {
   EstablishmentStatus,
   GroupScope,
   MembershipStatus,
+  PaymentMethod,
 } from '@prisma/client';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
@@ -301,7 +302,7 @@ describe('Bookings routes RT-03..RT-08 (HTTP e2e)', () => {
     const anonymous = await request(server())
       .post('/api/v1/bookings')
       .set('Origin', ORIGIN)
-      .send({ spaceId: spaceE1, ...slot(9 * 60) })
+      .send({ spaceId: spaceE1, paymentMethod: PaymentMethod.cash, ...slot(9 * 60) })
       .expect(401);
     expectProblem(anonymous, 401, 'UNAUTHENTICATED');
 
@@ -317,7 +318,11 @@ describe('Bookings routes RT-03..RT-08 (HTTP e2e)', () => {
       const response = await auth(
         request(server())
           .post('/api/v1/bookings')
-          .send({ spaceId: spaceE1, ...slot(minute) }),
+          .send({
+            spaceId: spaceE1,
+            paymentMethod: PaymentMethod.cash,
+            ...slot(minute),
+          }),
         principal,
       ).expect(201);
 
@@ -525,6 +530,7 @@ describe('Bookings routes RT-03..RT-08 (HTTP e2e)', () => {
       .send({
         spaceId: spaceE1,
         playerId: users.playerA!.id,
+        paymentMethod: PaymentMethod.cash,
         ...slot(14 * 60),
       })
       .expect(401);
@@ -537,6 +543,7 @@ describe('Bookings routes RT-03..RT-08 (HTTP e2e)', () => {
           .send({
             spaceId: spaceE1,
             playerId: users.playerA!.id,
+            paymentMethod: PaymentMethod.cash,
             ...slot(14 * 60),
           }),
         principal,
@@ -557,6 +564,7 @@ describe('Bookings routes RT-03..RT-08 (HTTP e2e)', () => {
           .send({
             spaceId: spaceE1,
             playerId: users.playerA!.id,
+            paymentMethod: PaymentMethod.cash,
             ...slot(minute),
           }),
         principal,
@@ -641,6 +649,7 @@ describe('Bookings routes RT-03..RT-08 (HTTP e2e)', () => {
         startsAt: new Date(slot(14 * 60).startsAt),
         endsAt: new Date(slot(14 * 60).endsAt),
         status: BookingStatus.confirmed,
+        paymentMethod: PaymentMethod.cash,
         totalMinor: 0n,
         currency: 'COP',
       },

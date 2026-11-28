@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   BookingStatus,
   EstablishmentStatus,
+  PaymentMethod,
   Prisma,
   SpaceStatus,
   UserStatus,
@@ -60,6 +61,7 @@ const bookingSelect = {
   startsAt: true,
   endsAt: true,
   status: true,
+  paymentMethod: true,
   totalMinor: true,
   currency: true,
   idempotencyKey: true,
@@ -128,6 +130,7 @@ export interface BookingResponse {
   startsAt: string;
   endsAt: string;
   status: BookingStatus;
+  paymentMethod: PaymentMethod;
   totalMinor: string;
   currency: string;
   expiresAt: string | null;
@@ -207,6 +210,7 @@ interface InsertBookingInput {
   spaceId: string;
   startsAt: Date;
   endsAt: Date;
+  paymentMethod: PaymentMethod;
   totalMinor: bigint;
   currency: string;
   idempotencyKey: string | null;
@@ -248,6 +252,7 @@ export class BookingsService {
           playerId: actorId,
           startsAt: times.startsAtIso,
           endsAt: times.endsAtIso,
+          paymentMethod: dto.paymentMethod,
         })
       : null;
 
@@ -283,6 +288,7 @@ export class BookingsService {
       spaceId: resolved.spaceId,
       startsAt: resolved.startsAt,
       endsAt: resolved.endsAt,
+      paymentMethod: dto.paymentMethod,
       totalMinor: resolved.totalMinor,
       currency: resolved.currency,
       idempotencyKey,
@@ -322,6 +328,7 @@ export class BookingsService {
           playerId: dto.playerId,
           startsAt: times.startsAtIso,
           endsAt: times.endsAtIso,
+          paymentMethod: dto.paymentMethod,
         })
       : null;
 
@@ -359,6 +366,7 @@ export class BookingsService {
       spaceId: resolved.spaceId,
       startsAt: resolved.startsAt,
       endsAt: resolved.endsAt,
+      paymentMethod: dto.paymentMethod,
       totalMinor: resolved.totalMinor,
       currency: resolved.currency,
       idempotencyKey,
@@ -926,6 +934,7 @@ export class BookingsService {
               "starts_at",
               "ends_at",
               "status",
+              "payment_method",
               "total_minor",
               "currency",
               "idempotency_key",
@@ -944,6 +953,7 @@ export class BookingsService {
               CAST(${input.startsAt} AS timestamptz),
               CAST(${input.endsAt} AS timestamptz),
               CAST(${BookingStatus.confirmed} AS "BookingStatus"),
+              CAST(${input.paymentMethod} AS "PaymentMethod"),
               ${input.totalMinor},
               ${input.currency},
               CAST(${input.idempotencyKey} AS text),
@@ -1283,6 +1293,7 @@ function toBookingResponse(row: BookingRow): BookingResponse {
     startsAt: row.startsAt.toISOString(),
     endsAt: row.endsAt.toISOString(),
     status: row.status,
+    paymentMethod: row.paymentMethod,
     totalMinor: row.totalMinor.toString(),
     currency: row.currency,
     expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,

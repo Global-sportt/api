@@ -1,5 +1,7 @@
+import { PaymentMethod } from '@prisma/client';
 import { AppError } from '../../common/errors/app-error';
 import {
+  BOOKING_REQUEST_HASH_VERSION,
   canonicalBookingRequest,
   computeBookingRequestHash,
   normalizeIdempotencyKey,
@@ -11,6 +13,7 @@ const identity = {
   playerId: '33333333-3333-4333-8333-333333333333',
   startsAt: '2026-06-15T15:00:00.000Z',
   endsAt: '2026-06-15T16:00:00.000Z',
+  paymentMethod: PaymentMethod.cash,
 };
 
 describe('booking idempotency hash', () => {
@@ -24,11 +27,13 @@ describe('booking idempotency hash', () => {
     expect(canonical).toBe(
       `{"endsAt":"2026-06-15T16:00:00.000Z",` +
         `"establishmentId":"${identity.establishmentId}",` +
+        `"paymentMethod":"cash",` +
         `"playerId":"${identity.playerId}",` +
         `"spaceId":"${identity.spaceId}",` +
         `"startsAt":"2026-06-15T15:00:00.000Z",` +
-        `"version":1}`,
+        `"version":${BOOKING_REQUEST_HASH_VERSION}}`,
     );
+    expect(BOOKING_REQUEST_HASH_VERSION).toBe(2);
   });
 
   it('produces the same SHA-256 for equivalent instants and a different one when a field changes', () => {
@@ -53,6 +58,14 @@ describe('booking idempotency hash', () => {
     ).not.toBe(fromStrings);
     expect(
       computeBookingRequestHash({ ...identity, startsAt: '2026-06-15T16:00:00.000Z' }),
+    ).not.toBe(fromStrings);
+    // The payment method is part of the identity: same slot, different method
+    // must never replay the stored booking.
+    expect(
+      computeBookingRequestHash({
+        ...identity,
+        paymentMethod: PaymentMethod.transfer,
+      }),
     ).not.toBe(fromStrings);
   });
 

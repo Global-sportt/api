@@ -4,6 +4,7 @@ import {
   EstablishmentStatus,
   GroupScope,
   MembershipStatus,
+  PaymentMethod,
   SpaceStatus,
 } from '@prisma/client';
 import request from 'supertest';
@@ -984,7 +985,11 @@ describe('Establishments y membresías (e2e)', () => {
       return bearer(
         request(server())
           .post('/api/v1/bookings')
-          .send({ spaceId: targetSpaceId, ...slot }),
+          .send({
+            spaceId: targetSpaceId,
+            paymentMethod: PaymentMethod.cash,
+            ...slot,
+          }),
         token,
       );
     }

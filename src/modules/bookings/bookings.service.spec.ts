@@ -1,6 +1,7 @@
 import {
   BookingStatus,
   EstablishmentStatus,
+  PaymentMethod,
   SpaceStatus,
   UserStatus,
 } from '@prisma/client';
@@ -170,6 +171,7 @@ function bookingRow(overrides: Record<string, unknown> = {}) {
     startsAt,
     endsAt,
     status: BookingStatus.confirmed,
+    paymentMethod: PaymentMethod.cash,
     totalMinor: 25_000n,
     currency: 'COP',
     idempotencyKey: null,
@@ -185,6 +187,7 @@ function futureRequest() {
   const startsAt = new Date(Date.now() + 60 * 60_000);
   return {
     spaceId: SPACE_ID,
+    paymentMethod: PaymentMethod.cash,
     startsAt: startsAt.toISOString(),
     endsAt: new Date(startsAt.getTime() + 60 * 60_000).toISOString(),
   };
@@ -231,6 +234,7 @@ describe('BookingsService — F-01/F-02/F-06 hardening', () => {
       const error = await expectAppError(
         service.createForPlayer(USER_ID, {
           spaceId: SPACE_ID,
+          paymentMethod: PaymentMethod.cash,
           startsAt: startsAt.toISOString(),
           endsAt: new Date(startsAt.getTime() + 60 * 60_000).toISOString(),
         }),
@@ -256,6 +260,7 @@ describe('BookingsService — F-01/F-02/F-06 hardening', () => {
         service.createForTenant(USER_ID, ESTABLISHMENT_ID, {
           spaceId: SPACE_ID,
           playerId: OTHER_USER_ID,
+          paymentMethod: PaymentMethod.cash,
           startsAt: startsAt.toISOString(),
           endsAt: new Date(startsAt.getTime() + 60 * 60_000).toISOString(),
         }),
@@ -405,6 +410,7 @@ describe('BookingsService — F-01/F-02/F-06 hardening', () => {
           id: BOOKING_ID,
           playerId: USER_ID,
           status: BookingStatus.confirmed,
+          paymentMethod: PaymentMethod.cash,
         }),
       );
     });

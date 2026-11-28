@@ -62,17 +62,17 @@ La disponibilidad excluye reservas activas y holds `pending_payment` con `expire
 
 | Método | Ruta | Auth / permiso | Cuerpo / query | Respuestas |
 |---|---|---|---|---|
-| POST | `/bookings` | Bearer; `booking:create` own | `spaceId`, `startsAt`, `endsAt` + `Idempotency-Key?` | 201; 200 replay; 400; 409 `SLOT_TAKEN`/`IDEMPOTENCY_KEY_REUSED` |
+| POST | `/bookings` | Bearer; `booking:create` own | `spaceId`, `paymentMethod`, `startsAt`, `endsAt` + `Idempotency-Key?` | 201; 200 replay; 400; 409 `SLOT_TAKEN`/`IDEMPOTENCY_KEY_REUSED` |
 | GET | `/me/bookings` | Bearer; `booking:read` own | `status?`, `spaceId?`, `playerId?` | 200 |
 | GET | `/me/bookings/:id` | Bearer; `booking:read` own | — | 200; 404 |
 | POST | `/me/bookings/:id/cancel` | Bearer; `booking:cancel` own | — | 200; 404; 409 `INVALID_STATE`/`CANCELLATION_WINDOW_CLOSED`/`BOOKING_EXPIRED` |
 | GET | `/establishments/:establishmentId/bookings` | Bearer + Tenant; `booking:read` establishment | `status?`, `spaceId?`, `playerId?` | 200; 403 T/P |
-| POST | `/establishments/:establishmentId/bookings` | Bearer + Tenant; `booking:create` establishment | `spaceId`, `playerId`, `startsAt`, `endsAt` + `Idempotency-Key?` | 201; 200 replay; 400; 404; 409 |
+| POST | `/establishments/:establishmentId/bookings` | Bearer + Tenant; `booking:create` establishment | `spaceId`, `playerId`, `paymentMethod`, `startsAt`, `endsAt` + `Idempotency-Key?` | 201; 200 replay; 400; 404; 409 |
 | PATCH | `/establishments/:establishmentId/bookings/:bookingId/status` | Bearer + Tenant; `booking:manage` | `status` | 200; 403 T/P; 404; 409 |
 
 Estados: `pending_payment`, `confirmed`, `checked_in`, `completed`, `cancelled`, `expired`, `no_show`.
 Precio: calculado por el servidor desde la franja T5; el cliente no envía precio.
-Idempotencia: misma clave + mismo hash → 200 replay; misma clave + hash distinto → 409; reserva terminal → 409.
+Idempotencia: misma clave + mismo hash (incluye `paymentMethod`) → 200 replay; misma clave + hash distinto → 409; reserva terminal → 409.
 
 ## Dashboard
 

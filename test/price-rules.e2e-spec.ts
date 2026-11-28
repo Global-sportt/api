@@ -4,6 +4,7 @@ import {
   EstablishmentStatus,
   GroupScope,
   MembershipStatus,
+  PaymentMethod,
 } from '@prisma/client';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
@@ -603,7 +604,11 @@ describe('Reglas de precio por franja (HTTP e2e)', () => {
       const ruleBooking = await auth(
         request(server())
           .post('/api/v1/bookings')
-          .send({ spaceId: spaceE1, ...slotAtMinutes(10 * 60) }),
+          .send({
+            spaceId: spaceE1,
+            paymentMethod: PaymentMethod.cash,
+            ...slotAtMinutes(10 * 60),
+          }),
         'player',
       ).expect(201);
       bookingRuleId = ruleBooking.body.id as string;
@@ -624,7 +629,11 @@ describe('Reglas de precio por franja (HTTP e2e)', () => {
       const baseBooking = await auth(
         request(server())
           .post('/api/v1/bookings')
-          .send({ spaceId: spaceE1, ...slotAtMinutes(9 * 60) }),
+          .send({
+            spaceId: spaceE1,
+            paymentMethod: PaymentMethod.cash,
+            ...slotAtMinutes(9 * 60),
+          }),
         'player',
       ).expect(201);
       bookingBaseId = baseBooking.body.id as string;
