@@ -592,6 +592,7 @@ export class BookingsService {
         establishmentId: true,
         slotMinutes: true,
         bufferMinutes: true,
+        basePriceMinor: true,
         status: true,
         establishment: {
           select: {
@@ -654,6 +655,7 @@ export class BookingsService {
         id: space.id,
         slotMinutes: space.slotMinutes,
         bufferMinutes: space.bufferMinutes,
+        basePriceMinor: space.basePriceMinor,
       },
       timezone,
       date: localDate,
