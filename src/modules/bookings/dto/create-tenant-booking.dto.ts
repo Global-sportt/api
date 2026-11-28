@@ -1,3 +1,4 @@
+import { ApiProperty } from '@nestjs/swagger';
 import { IsUUID } from 'class-validator';
 import { CreateBookingDto } from './create-booking.dto';
 
@@ -7,6 +8,10 @@ import { CreateBookingDto } from './create-booking.dto';
  * global whitelist pipe.
  */
 export class CreateTenantBookingDto extends CreateBookingDto {
+  @ApiProperty({
+    format: 'uuid',
+    description: 'Jugador activo para el que se crea la reserva.',
+  })
   @IsUUID()
   playerId!: string;
 }

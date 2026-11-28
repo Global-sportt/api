@@ -3924,7 +3924,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"startsAt\": \"{{bookingStart}}\",\n  \"endsAt\": \"{{bookingEnd}}\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingStart}}\",\n  \"endsAt\": \"{{bookingEnd}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -3998,7 +3998,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"startsAt\": \"{{bookingStart}}\",\n  \"endsAt\": \"{{bookingEnd}}\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingStart}}\",\n  \"endsAt\": \"{{bookingEnd}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -4071,7 +4071,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{space2Id}}\",\n  \"startsAt\": \"{{bookingStart}}\",\n  \"endsAt\": \"{{bookingEnd}}\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{space2Id}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingStart}}\",\n  \"endsAt\": \"{{bookingEnd}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -4151,7 +4151,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"startsAt\": \"{{bookingStart}}\",\n  \"endsAt\": \"{{bookingEnd}}\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingStart}}\",\n  \"endsAt\": \"{{bookingEnd}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -4567,7 +4567,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"playerId\": \"{{player2UserId}}\",\n  \"startsAt\": \"{{bookingStart2}}\",\n  \"endsAt\": \"{{bookingEnd2}}\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"playerId\": \"{{player2UserId}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingStart2}}\",\n  \"endsAt\": \"{{bookingEnd2}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -4639,7 +4639,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"playerId\": \"{{player2UserId}}\",\n  \"startsAt\": \"{{bookingStart2}}\",\n  \"endsAt\": \"{{bookingEnd2}}\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"playerId\": \"{{player2UserId}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingStart2}}\",\n  \"endsAt\": \"{{bookingEnd2}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -4709,7 +4709,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{space2Id}}\",\n  \"playerId\": \"{{player2UserId}}\",\n  \"startsAt\": \"{{bookingStart3}}\",\n  \"endsAt\": \"{{bookingEnd3}}\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{space2Id}}\",\n  \"playerId\": \"{{player2UserId}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingStart3}}\",\n  \"endsAt\": \"{{bookingEnd3}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -4779,7 +4779,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"playerId\": \"{{nonexistentUserId}}\",\n  \"startsAt\": \"{{bookingStart3}}\",\n  \"endsAt\": \"{{bookingEnd3}}\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"playerId\": \"{{nonexistentUserId}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingStart3}}\",\n  \"endsAt\": \"{{bookingEnd3}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -5060,7 +5060,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"startsAt\": \"{{bookingStart3}}\",\n  \"endsAt\": \"{{bookingEnd3}}\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingStart3}}\",\n  \"endsAt\": \"{{bookingEnd3}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -5272,7 +5272,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"startsAt\": \"{{bookingStart3}}\",\n  \"endsAt\": \"{{bookingEnd3}}\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingStart3}}\",\n  \"endsAt\": \"{{bookingEnd3}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -5728,7 +5728,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"startsAt\": \"{{bookingStart}}\",\n  \"endsAt\": \"{{bookingEnd}}\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingStart}}\",\n  \"endsAt\": \"{{bookingEnd}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -5893,7 +5893,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"startsAt\": \"{{bookingDate}}T03:00:00.000Z\",\n  \"endsAt\": \"{{bookingDate}}T04:00:00.000Z\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingDate}}T03:00:00.000Z\",\n  \"endsAt\": \"{{bookingDate}}T04:00:00.000Z\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -5961,7 +5961,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"startsAt\": \"{{bookingStart}}\",\n  \"endsAt\": \"{{bookingStart}}\"\n}",
+              "raw": "{\n  \"spaceId\": \"{{spaceId}}\",\n  \"paymentMethod\": \"cash\",\n  \"startsAt\": \"{{bookingStart}}\",\n  \"endsAt\": \"{{bookingStart}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"

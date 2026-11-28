@@ -5,6 +5,7 @@ import {
   EstablishmentStatus,
   GroupScope,
   MembershipStatus,
+  PaymentMethod,
 } from '@prisma/client';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
@@ -370,6 +371,7 @@ describe('Agenda diaria por establecimiento (HTTP e2e)', () => {
           startsAt: input.startsAt,
           endsAt: new Date(input.startsAt.getTime() + 60 * 60_000),
           status: input.status,
+          paymentMethod: PaymentMethod.cash,
           totalMinor: input.totalMinor,
           currency: 'COP',
         },

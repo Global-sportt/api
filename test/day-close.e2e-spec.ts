@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import {
   BookingStatus,
   GroupScope,
+  PaymentMethod,
   SpaceStatus,
 } from '@prisma/client';
 import request from 'supertest';
@@ -303,7 +304,9 @@ function createOwnBooking(
   slot: Slot,
 ): request.Test {
   return bearer(
-    request(server()).post('/api/v1/bookings').send({ spaceId, ...slot }),
+    request(server())
+      .post('/api/v1/bookings')
+      .send({ spaceId, paymentMethod: PaymentMethod.cash, ...slot }),
     token,
   );
 }
@@ -318,7 +321,7 @@ function createTenantBooking(
   return bearer(
     request(server())
       .post(`/api/v1/establishments/${establishmentId}/bookings`)
-      .send({ spaceId, playerId, ...slot }),
+      .send({ spaceId, playerId, paymentMethod: PaymentMethod.cash, ...slot }),
     token,
   );
 }
@@ -491,6 +494,7 @@ describe('Cierre diario: totales, consulta y bloqueo operativo (e2e)', () => {
         startsAt: new Date(slotAt(day, 13).startsAt),
         endsAt: new Date(slotAt(day, 13).endsAt),
         status: BookingStatus.pending_payment,
+        paymentMethod: PaymentMethod.cash,
         totalMinor: 25_000n,
         currency: 'COP',
         expiresAt: new Date(Date.now() + 30 * 60_000),

@@ -5,6 +5,7 @@ import {
   EstablishmentStatus,
   GroupScope,
   MembershipStatus,
+  PaymentMethod,
   UserStatus,
 } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
@@ -221,6 +222,7 @@ async function createBooking(input: {
         TIMEZONE,
       ).instant,
       status: input.status,
+      paymentMethod: PaymentMethod.cash,
       totalMinor: input.totalMinor,
       currency: 'COP',
       ...(input.status === BookingStatus.pending_payment

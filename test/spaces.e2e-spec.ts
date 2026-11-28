@@ -5,6 +5,7 @@ import {
   EstablishmentStatus,
   GroupScope,
   MembershipStatus,
+  PaymentMethod,
 } from '@prisma/client';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
@@ -291,6 +292,7 @@ describe('Spaces y disponibilidad (T5, HTTP e2e)', () => {
         startsAt: new Date(bookedStart),
         endsAt: new Date(bookedEnd),
         status: BookingStatus.confirmed,
+        paymentMethod: PaymentMethod.cash,
         totalMinor: 0n,
         currency: 'COP',
       },
@@ -951,6 +953,7 @@ describe('Spaces y disponibilidad (T5, HTTP e2e)', () => {
           startsAt: wallClockToUtc(date, 13 * 60, TIMEZONE).instant,
           endsAt: wallClockToUtc(date, 14 * 60, TIMEZONE).instant,
           status: BookingStatus.confirmed,
+          paymentMethod: PaymentMethod.cash,
           totalMinor: 0n,
           currency: 'COP',
         },

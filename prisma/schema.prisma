@@ -47,6 +47,12 @@ enum BookingStatus {
   no_show
 }
 
+enum PaymentMethod {
+  cash
+  transfer
+  card
+}
+
 enum UserStatus {
   active
   suspended
@@ -440,6 +446,9 @@ model Booking {
   startsAt        DateTime      @map("starts_at") @db.Timestamptz(6)
   endsAt          DateTime      @map("ends_at") @db.Timestamptz(6)
   status          BookingStatus @default(confirmed)
+  // Obligatorio en la API: no hay default para que una reserva sin método de
+  // pago falle en la validación y nunca se guarde en silencio.
+  paymentMethod   PaymentMethod @map("payment_method")
   totalMinor      BigInt        @map("total_minor")
   currency        String
   idempotencyKey  String?       @map("idempotency_key")

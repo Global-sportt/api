@@ -22,6 +22,7 @@ import { AppError } from '../../common/errors/app-error';
 import { wallClockToUtc } from '../../common/time/zoned-time';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { SlotsService } from '../spaces/slots.service';
+import type { BookingNotificationsService } from './booking-notifications.service';
 import { BookingsService } from './bookings.service';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -58,6 +59,10 @@ function buildService(plan: QueryPlan = { kind: PLAN_KIND.ALWAYS_ALLOWED }) {
     plan: jest.fn().mockResolvedValue(plan),
   };
   const logger = { raw: { info: jest.fn() }, error: jest.fn() };
+  const notifications = {
+    notifyCreated: jest.fn().mockResolvedValue(undefined),
+    notifyCancelled: jest.fn().mockResolvedValue(undefined),
+  };
 
   return {
     service: new BookingsService(
@@ -66,6 +71,7 @@ function buildService(plan: QueryPlan = { kind: PLAN_KIND.ALWAYS_ALLOWED }) {
       permissions as unknown as PermissionResolver,
       authorization as unknown as AuthorizationService,
       logger as unknown as AppLogger,
+      notifications as unknown as BookingNotificationsService,
     ),
     prisma,
     permissions,

@@ -1,6 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { BookingStatus, EstablishmentStatus, GroupScope, SpaceStatus } from '@prisma/client';
+import { BookingStatus, EstablishmentStatus, GroupScope, PaymentMethod, SpaceStatus } from '@prisma/client';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { AppModule } from '../src/app.module';
@@ -53,6 +53,7 @@ interface BookingBody {
   startsAt: string;
   endsAt: string;
   status: BookingStatus;
+  paymentMethod: PaymentMethod;
   totalMinor: string;
   currency: string;
   expiresAt: string | null;
@@ -381,12 +382,13 @@ function createOwnBooking(
   spaceId: string,
   slot: Slot,
   idempotencyKey?: string,
+  paymentMethod: PaymentMethod = PaymentMethod.cash,
 ): request.Test {
   const builder = request(server())
     .post('/api/v1/bookings')
     .set('Authorization', `Bearer ${token}`)
     .set('Origin', ORIGIN)
-    .send({ spaceId, ...slot });
+    .send({ spaceId, paymentMethod, ...slot });
 
   if (idempotencyKey) {
     builder.set('Idempotency-Key', idempotencyKey);
@@ -401,12 +403,20 @@ function createTenantBooking(
   spaceId: string,
   playerId: string,
   slot: Slot,
+  paymentMethod: PaymentMethod = PaymentMethod.cash,
+  idempotencyKey?: string,
 ): request.Test {
-  return request(server())
+  const builder = request(server())
     .post(`/api/v1/establishments/${establishmentId}/bookings`)
     .set('Authorization', `Bearer ${token}`)
     .set('Origin', ORIGIN)
-    .send({ spaceId, playerId, ...slot });
+    .send({ spaceId, playerId, paymentMethod, ...slot });
+
+  if (idempotencyKey) {
+    builder.set('Idempotency-Key', idempotencyKey);
+  }
+
+  return builder;
 }
 
 async function publicAvailability(
@@ -451,6 +461,7 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
   const day3 = localDate(3);
   const day4 = localDate(4);
   const day5 = localDate(5);
+  const day6 = localDate(6);
   const pastDay = localDate(-1);
 
   beforeAll(async () => {
@@ -543,6 +554,7 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
         startsAt: slot.startsAt,
         endsAt: slot.endsAt,
         status: BookingStatus.confirmed,
+        paymentMethod: PaymentMethod.cash,
         totalMinor: '25000',
         currency: 'COP',
         expiresAt: null,
@@ -553,7 +565,157 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
       where: { id: response.body.id as string },
     });
     expect(row?.totalMinor).toBe(25_000n);
+    expect(row?.paymentMethod).toBe(PaymentMethod.cash);
     expect(row?.requestHash).toBeNull();
+  });
+
+  it('exige un método de pago: sin campo o con valor desconocido responde 400', async () => {
+    const before = await prisma.booking.count({ where: { spaceId: s3 } });
+    const slot = slotAt(day6, 9);
+
+    const missingOwn = await bearer(
+      request(server()).post('/api/v1/bookings').send({ spaceId: s3, ...slot }),
+      playerA.token,
+    ).expect(400);
+    expect(missingOwn.body.code).toBe('VALIDATION_ERROR');
+    expect(missingOwn.body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'paymentMethod' }),
+      ]),
+    );
+
+    const invalidOwn = await bearer(
+      request(server())
+        .post('/api/v1/bookings')
+        .send({ spaceId: s3, paymentMethod: 'bitcoin', ...slot }),
+      playerA.token,
+    ).expect(400);
+    expect(invalidOwn.body.code).toBe('VALIDATION_ERROR');
+    expect(invalidOwn.body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'paymentMethod' }),
+      ]),
+    );
+
+    // The tenant DTO inherits the field, so leaving it out must fail here too.
+    const missingTenant = await bearer(
+      request(server())
+        .post(`/api/v1/establishments/${e1.id}/bookings`)
+        .send({ spaceId: s3, playerId: playerB.userId, ...slot }),
+      staff1.token,
+    ).expect(400);
+    expect(missingTenant.body.code).toBe('VALIDATION_ERROR');
+    expect(missingTenant.body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'paymentMethod' }),
+      ]),
+    );
+
+    expect(await prisma.booking.count({ where: { spaceId: s3 } })).toBe(before);
+  });
+
+  it('persiste y devuelve cada método de pago permitido', async () => {
+    const cases: Array<{ method: PaymentMethod; slot: Slot }> = [
+      { method: PaymentMethod.cash, slot: slotAt(day6, 10) },
+      { method: PaymentMethod.transfer, slot: slotAt(day6, 11) },
+      { method: PaymentMethod.card, slot: slotAt(day6, 12) },
+    ];
+
+    for (const { method, slot } of cases) {
+      const created = await createOwnBooking(
+        playerA.token,
+        s3,
+        slot,
+        undefined,
+        method,
+      ).expect(201);
+      expect(created.body.paymentMethod).toBe(method);
+
+      const stored = await prisma.booking.findUniqueOrThrow({
+        where: { id: created.body.id as string },
+        select: { paymentMethod: true },
+      });
+      expect(stored.paymentMethod).toBe(method);
+
+      const detail = await bearer(
+        request(server()).get(
+          `/api/v1/me/bookings/${created.body.id as string}`,
+        ),
+        playerA.token,
+      ).expect(200);
+      expect(detail.body.paymentMethod).toBe(method);
+    }
+  });
+
+  it('la idempotencia incluye el método: replay igual es 200 y otro método es 409', async () => {
+    const ownSlot = slotAt(day6, 13);
+    const ownKey = `K-PAY-${Date.now()}`;
+
+    const first = await createOwnBooking(
+      playerA.token,
+      s3,
+      ownSlot,
+      ownKey,
+      PaymentMethod.cash,
+    ).expect(201);
+
+    const replay = await createOwnBooking(
+      playerA.token,
+      s3,
+      ownSlot,
+      ownKey,
+      PaymentMethod.cash,
+    ).expect(200);
+    expect(replay.headers['idempotent-replay']).toBe('true');
+    expect(replay.body.id).toBe(first.body.id);
+    expect(replay.body.paymentMethod).toBe(PaymentMethod.cash);
+
+    const reused = await createOwnBooking(
+      playerA.token,
+      s3,
+      ownSlot,
+      ownKey,
+      PaymentMethod.transfer,
+    ).expect(409);
+    expect(reused.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+
+    const rows = await prisma.booking.findMany({
+      where: { createdByUserId: playerA.userId, idempotencyKey: ownKey },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].paymentMethod).toBe(PaymentMethod.cash);
+
+    // Same contract on the tenant route.
+    const tenantSlot = slotAt(day6, 14);
+    const tenantKey = `K-PAY-T-${Date.now()}`;
+
+    const tenantFirst = await createTenantBooking(
+      staff1.token,
+      e1.id,
+      s3,
+      playerB.userId,
+      tenantSlot,
+      PaymentMethod.card,
+      tenantKey,
+    ).expect(201);
+    expect(tenantFirst.body.paymentMethod).toBe(PaymentMethod.card);
+
+    const tenantReused = await createTenantBooking(
+      staff1.token,
+      e1.id,
+      s3,
+      playerB.userId,
+      tenantSlot,
+      PaymentMethod.cash,
+      tenantKey,
+    ).expect(409);
+    expect(tenantReused.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+
+    expect(
+      await prisma.booking.count({
+        where: { createdByUserId: staff1.userId, idempotencyKey: tenantKey },
+      }),
+    ).toBe(1);
   });
 
   it('rechaza slots no generados, espacios inexistentes/inactivos y campos de precio', async () => {
@@ -573,7 +735,12 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
     const forgedPrice = await bearer(
       request(server())
         .post('/api/v1/bookings')
-        .send({ spaceId: s1, ...slotAt(day1, 10), totalMinor: '1' }),
+        .send({
+          spaceId: s1,
+          paymentMethod: PaymentMethod.cash,
+          ...slotAt(day1, 10),
+          totalMinor: '1',
+        }),
       playerA.token,
     ).expect(400);
     expect(forgedPrice.body.code).toBe('VALIDATION_ERROR');
@@ -833,6 +1000,7 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
         spaceId: s1,
         playerId: playerA.userId,
         createdByUserId: staff1.userId,
+        paymentMethod: PaymentMethod.cash,
         totalMinor: '25000',
       }),
     );
@@ -914,10 +1082,10 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
       await prisma.$executeRawUnsafe(
         `INSERT INTO "bookings" (
           "id", "public_code", "establishment_id", "space_id", "player_id",
-          "created_by_user_id", "starts_at", "ends_at", "status", "total_minor",
-          "currency", "created_at", "updated_at"
+          "created_by_user_id", "starts_at", "ends_at", "status", "payment_method",
+          "total_minor", "currency", "created_at", "updated_at"
         ) VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6::uuid,
-                  $7::timestamptz, $8::timestamptz, 'confirmed', 0, 'COP', NOW(), NOW())`,
+                  $7::timestamptz, $8::timestamptz, 'confirmed', 'cash', 0, 'COP', NOW(), NOW())`,
         badId,
         `BKDIRECT${Date.now()}`,
         e1.id,
@@ -997,6 +1165,7 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
         playerId: playerA.userId,
         startsAt: slot.startsAt,
         endsAt: slot.endsAt,
+        paymentMethod: PaymentMethod.cash,
       }),
     );
 
@@ -1052,6 +1221,7 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
         startsAt: new Date(slot.startsAt),
         endsAt: new Date(slot.endsAt),
         status: BookingStatus.pending_payment,
+        paymentMethod: PaymentMethod.cash,
         totalMinor: 25_000n,
         currency: 'COP',
         // First an unexpired hold hides the slot.
@@ -1121,6 +1291,7 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
         startsAt: new Date(lateSlot.startsAt),
         endsAt: new Date(lateSlot.endsAt),
         status: BookingStatus.pending_payment,
+        paymentMethod: PaymentMethod.cash,
         totalMinor: 25_000n,
         currency: 'COP',
         expiresAt: new Date(Date.now() - 60_000),
@@ -1251,6 +1422,7 @@ describe('Reservas: concurrencia, idempotencia y expiración (e2e)', () => {
         startsAt: new Date(pastSlot.startsAt),
         endsAt: new Date(pastSlot.endsAt),
         status: BookingStatus.confirmed,
+        paymentMethod: PaymentMethod.cash,
         totalMinor: 25_000n,
         currency: 'COP',
       },
