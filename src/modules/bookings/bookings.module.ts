@@ -12,6 +12,8 @@ import {
   MyBookingsController,
 } from './bookings.controller';
 import { BookingsService } from './bookings.service';
+import { DayCloseController } from './day-close.controller';
+import { DayCloseService } from './day-close.service';
 
 @Module({
   imports: [AuthzModule, SpacesModule],
@@ -19,10 +21,12 @@ import { BookingsService } from './bookings.service';
     BookingsController,
     MyBookingsController,
     EstablishmentBookingsController,
+    DayCloseController,
   ],
   providers: [
     BookingsService,
     BookingsExpiryService,
+    DayCloseService,
     TenantGuard,
     AuthorizationGuard,
     {

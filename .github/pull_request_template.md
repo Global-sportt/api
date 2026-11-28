@@ -25,6 +25,7 @@
 | `npm run lint` | |
 | `npm test -- --runInBand` | |
 | `E2E_REAL_CERBOS=1 npm run test:e2e` | |
+| `cerbos compile cerbos --tests` | |
 | `npm run build` | |
 | `bash scripts/ci/check-migration-drift.sh` | |
 

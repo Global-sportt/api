@@ -39,7 +39,11 @@ const ESTABLISHMENT = {
 interface TxMock {
   $queryRaw: jest.Mock;
   user: { findUnique: jest.Mock };
-  establishment: { create: jest.Mock };
+  establishment: {
+    create: jest.Mock;
+    findUnique: jest.Mock;
+    update: jest.Mock;
+  };
   membership: {
     create: jest.Mock;
     findUnique: jest.Mock;
@@ -55,7 +59,11 @@ function buildTx(): TxMock {
   return {
     $queryRaw: jest.fn().mockResolvedValue([{ id: ESTABLISHMENT.id }]),
     user: { findUnique: jest.fn() },
-    establishment: { create: jest.fn().mockResolvedValue(ESTABLISHMENT) },
+    establishment: {
+      create: jest.fn().mockResolvedValue(ESTABLISHMENT),
+      findUnique: jest.fn(),
+      update: jest.fn(),
+    },
     membership: {
       create: jest.fn().mockResolvedValue({ id: 'm-new' }),
       findUnique: jest.fn(),
@@ -708,6 +716,136 @@ describe('EstablishmentsService', () => {
           groups: [OWNER_GROUP.slug],
         },
       ]);
+    });
+  });
+
+  describe('changeStatus', () => {
+    it('suspende una sede activa, escribe solo status y audita from/to', async () => {
+      tx.establishment.findUnique.mockResolvedValue(ESTABLISHMENT);
+      tx.establishment.update.mockResolvedValue({
+        ...ESTABLISHMENT,
+        status: EstablishmentStatus.suspended,
+      });
+
+      const result = await service.changeStatus(
+        'admin-1',
+        ESTABLISHMENT.id,
+        EstablishmentStatus.suspended,
+      );
+
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(tx.establishment.update).toHaveBeenCalledWith({
+        where: { id: ESTABLISHMENT.id },
+        data: { status: EstablishmentStatus.suspended },
+        select: expect.any(Object),
+      });
+      expect(result.status).toBe(EstablishmentStatus.suspended);
+      expect(logger.raw.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'establishment.status_changed',
+          actorId: 'admin-1',
+          establishmentId: ESTABLISHMENT.id,
+          from: EstablishmentStatus.active,
+          to: EstablishmentStatus.suspended,
+          decision: 'allow',
+        }),
+        'establishment.status_changed',
+      );
+    });
+
+    it('reactiva una sede suspendida y audita la transición inversa', async () => {
+      tx.establishment.findUnique.mockResolvedValue({
+        ...ESTABLISHMENT,
+        status: EstablishmentStatus.suspended,
+      });
+      tx.establishment.update.mockResolvedValue(ESTABLISHMENT);
+
+      const result = await service.changeStatus(
+        'admin-1',
+        ESTABLISHMENT.id,
+        EstablishmentStatus.active,
+      );
+
+      expect(tx.establishment.update).toHaveBeenCalledWith({
+        where: { id: ESTABLISHMENT.id },
+        data: { status: EstablishmentStatus.active },
+        select: expect.any(Object),
+      });
+      expect(result.status).toBe(EstablishmentStatus.active);
+      expect(logger.raw.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'establishment.status_changed',
+          actorId: 'admin-1',
+          establishmentId: ESTABLISHMENT.id,
+          from: EstablishmentStatus.suspended,
+          to: EstablishmentStatus.active,
+        }),
+        'establishment.status_changed',
+      );
+    });
+
+    it('repetir el estado actual es idempotente: sin escritura ni auditoría', async () => {
+      tx.establishment.findUnique.mockResolvedValue(ESTABLISHMENT);
+
+      const result = await service.changeStatus(
+        'admin-1',
+        ESTABLISHMENT.id,
+        EstablishmentStatus.active,
+      );
+
+      expect(result.status).toBe(EstablishmentStatus.active);
+      expect(tx.establishment.update).not.toHaveBeenCalled();
+      expect(logger.raw.info).not.toHaveBeenCalled();
+    });
+
+    it('rechaza una transición desde pending con 409 INVALID_STATE', async () => {
+      tx.establishment.findUnique.mockResolvedValue({
+        ...ESTABLISHMENT,
+        status: EstablishmentStatus.pending,
+      });
+
+      await expectAppError(
+        service.changeStatus(
+          'admin-1',
+          ESTABLISHMENT.id,
+          EstablishmentStatus.suspended,
+        ),
+        409,
+        'INVALID_STATE',
+      );
+
+      expect(tx.establishment.update).not.toHaveBeenCalled();
+      expect(logger.raw.info).not.toHaveBeenCalled();
+    });
+
+    it('rechaza un estado destino fuera del contrato con 400 VALIDATION_ERROR', async () => {
+      await expectAppError(
+        service.changeStatus(
+          'admin-1',
+          ESTABLISHMENT.id,
+          EstablishmentStatus.pending,
+        ),
+        400,
+        'VALIDATION_ERROR',
+      );
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('responde 404 ESTABLISHMENT_NOT_FOUND si la sede no existe', async () => {
+      tx.$queryRaw.mockResolvedValue([]);
+
+      await expectAppError(
+        service.changeStatus(
+          'admin-1',
+          ESTABLISHMENT.id,
+          EstablishmentStatus.suspended,
+        ),
+        404,
+        'ESTABLISHMENT_NOT_FOUND',
+      );
+
+      expect(tx.establishment.findUnique).not.toHaveBeenCalled();
     });
   });
 });
