@@ -32,6 +32,12 @@ const ESTABLISHMENT = {
   slug: 'cancha-norte',
   timezone: 'America/Bogota',
   currency: 'COP',
+  address: null,
+  contactPhone: null,
+  contactEmail: null,
+  cancellationPolicy: null,
+  usagePolicy: null,
+  rules: null,
   status: EstablishmentStatus.active,
   createdAt: new Date('2026-11-26T12:00:00.000Z'),
 };
@@ -141,7 +147,11 @@ describe('EstablishmentsService', () => {
   let tx: TxMock;
   let prisma: {
     $transaction: jest.Mock;
-    establishment: { findMany: jest.Mock; findUnique: jest.Mock };
+    establishment: {
+      findMany: jest.Mock;
+      findUnique: jest.Mock;
+      update: jest.Mock;
+    };
     membership: { findMany: jest.Mock };
   };
   let logger: { raw: { info: jest.Mock } };
@@ -151,7 +161,11 @@ describe('EstablishmentsService', () => {
     tx = buildTx();
     prisma = {
       $transaction: jest.fn(),
-      establishment: { findMany: jest.fn(), findUnique: jest.fn() },
+      establishment: {
+        findMany: jest.fn(),
+        findUnique: jest.fn(),
+        update: jest.fn(),
+      },
       membership: { findMany: jest.fn() },
     };
     prisma.$transaction.mockImplementation(
@@ -716,6 +730,258 @@ describe('EstablishmentsService', () => {
           groups: [OWNER_GROUP.slug],
         },
       ]);
+    });
+  });
+
+  describe('update', () => {
+    const profile = {
+      name: 'Cancha Norte Renovada',
+      timezone: 'America/Lima',
+      currency: 'PEN',
+      address: 'Av. Siempreviva 742',
+      contactPhone: '+51 999 888 777',
+      contactEmail: 'reservas@cancha.example',
+      cancellationPolicy: 'Cancelación sin costo hasta 24 h antes.',
+      usagePolicy: 'Uso exclusivo para actividades deportivas.',
+      rules: 'Prohibido ingresar con alimentos.',
+    };
+
+    beforeEach(() => {
+      prisma.establishment.findUnique.mockResolvedValue({
+        id: ESTABLISHMENT.id,
+      });
+      prisma.establishment.update.mockResolvedValue({
+        ...ESTABLISHMENT,
+        ...profile,
+      });
+    });
+
+    it('actualiza los campos del perfil y devuelve los nuevos valores con status', async () => {
+      const result = await service.update('owner-1', ESTABLISHMENT.id, profile);
+
+      expect(prisma.establishment.findUnique).toHaveBeenCalledWith({
+        where: { id: ESTABLISHMENT.id },
+        select: { id: true },
+      });
+      expect(prisma.establishment.update).toHaveBeenCalledWith({
+        where: { id: ESTABLISHMENT.id },
+        data: profile,
+        select: expect.objectContaining({
+          address: true,
+          contactPhone: true,
+          contactEmail: true,
+          cancellationPolicy: true,
+          usagePolicy: true,
+          rules: true,
+          status: true,
+        }),
+      });
+      expect(result).toMatchObject({
+        status: EstablishmentStatus.active,
+        ...profile,
+      });
+    });
+
+    it('rechaza un body vacío con 400 VALIDATION_ERROR sin tocar la base', async () => {
+      await expectAppError(
+        service.update('owner-1', ESTABLISHMENT.id, {}),
+        400,
+        'VALIDATION_ERROR',
+      );
+
+      expect(prisma.establishment.findUnique).not.toHaveBeenCalled();
+      expect(prisma.establishment.update).not.toHaveBeenCalled();
+    });
+
+    it('rechaza una zona horaria que no es IANA válida', async () => {
+      await expectAppError(
+        service.update('owner-1', ESTABLISHMENT.id, {
+          timezone: 'No/Existe',
+        }),
+        400,
+        'VALIDATION_ERROR',
+      );
+
+      expect(prisma.establishment.update).not.toHaveBeenCalled();
+    });
+
+    it('rechaza una moneda que no son 3 letras mayúsculas', async () => {
+      await expectAppError(
+        service.update('owner-1', ESTABLISHMENT.id, { currency: 'cop' }),
+        400,
+        'VALIDATION_ERROR',
+      );
+
+      expect(prisma.establishment.update).not.toHaveBeenCalled();
+    });
+
+    it('rechaza textos por encima del límite del contrato', async () => {
+      await expectAppError(
+        service.update('owner-1', ESTABLISHMENT.id, {
+          cancellationPolicy: 'x'.repeat(4001),
+        }),
+        400,
+        'VALIDATION_ERROR',
+      );
+
+      await expectAppError(
+        service.update('owner-1', ESTABLISHMENT.id, {
+          address: 'x'.repeat(301),
+        }),
+        400,
+        'VALIDATION_ERROR',
+      );
+
+      await expectAppError(
+        service.update('owner-1', ESTABLISHMENT.id, {
+          contactPhone: '1'.repeat(41),
+        }),
+        400,
+        'VALIDATION_ERROR',
+      );
+
+      expect(prisma.establishment.update).not.toHaveBeenCalled();
+    });
+
+    it('responde 404 ESTABLISHMENT_NOT_FOUND si la sede no existe', async () => {
+      prisma.establishment.findUnique.mockResolvedValue(null);
+
+      await expectAppError(
+        service.update('owner-1', ESTABLISHMENT.id, { name: 'Otra' }),
+        404,
+        'ESTABLISHMENT_NOT_FOUND',
+      );
+
+      expect(prisma.establishment.update).not.toHaveBeenCalled();
+    });
+
+    it('permite limpiar los campos de contacto enviando null', async () => {
+      await service.update('owner-1', ESTABLISHMENT.id, {
+        address: null,
+        contactEmail: null,
+      });
+
+      expect(prisma.establishment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { address: null, contactEmail: null },
+        }),
+      );
+    });
+
+    it('audita actor, sede y nombres de campos sin registrar valores', async () => {
+      await service.update('owner-1', ESTABLISHMENT.id, profile);
+
+      expect(logger.raw.info).toHaveBeenCalledWith(
+        {
+          event: 'establishment.updated',
+          actorId: 'owner-1',
+          establishmentId: ESTABLISHMENT.id,
+          changedFields: [
+            'name',
+            'timezone',
+            'currency',
+            'address',
+            'contactPhone',
+            'contactEmail',
+            'cancellationPolicy',
+            'usagePolicy',
+            'rules',
+          ],
+          decision: 'allow',
+        },
+        'establishment.updated',
+      );
+
+      const [payload] = logger.raw.info.mock.calls[0] as [
+        Record<string, unknown>,
+      ];
+      const serialized = JSON.stringify(payload);
+      expect(serialized).not.toContain(profile.contactPhone);
+      expect(serialized).not.toContain(profile.contactEmail);
+      expect(serialized).not.toContain(profile.address);
+      expect(serialized).not.toContain(profile.rules);
+    });
+  });
+
+  describe('getPublicBySlug', () => {
+    it('devuelve solo el perfil público de una sede activa', async () => {
+      prisma.establishment.findUnique.mockResolvedValue({
+        name: ESTABLISHMENT.name,
+        slug: ESTABLISHMENT.slug,
+        timezone: ESTABLISHMENT.timezone,
+        currency: ESTABLISHMENT.currency,
+        address: 'Av. Siempreviva 742',
+        contactPhone: '+57 300 123 4567',
+        contactEmail: 'contacto@cancha.example',
+        cancellationPolicy: 'Política de cancelación.',
+        usagePolicy: 'Política de uso.',
+        rules: 'Reglas internas.',
+        status: EstablishmentStatus.active,
+      });
+
+      const result = await service.getPublicBySlug(ESTABLISHMENT.slug);
+
+      expect(prisma.establishment.findUnique).toHaveBeenCalledWith({
+        where: { slug: ESTABLISHMENT.slug },
+        select: expect.objectContaining({
+          name: true,
+          slug: true,
+          timezone: true,
+          currency: true,
+          address: true,
+          contactPhone: true,
+          contactEmail: true,
+          cancellationPolicy: true,
+          usagePolicy: true,
+          rules: true,
+        }),
+      });
+      expect(result).toEqual({
+        name: ESTABLISHMENT.name,
+        slug: ESTABLISHMENT.slug,
+        timezone: ESTABLISHMENT.timezone,
+        currency: ESTABLISHMENT.currency,
+        address: 'Av. Siempreviva 742',
+        contactPhone: '+57 300 123 4567',
+        contactEmail: 'contacto@cancha.example',
+        cancellationPolicy: 'Política de cancelación.',
+        usagePolicy: 'Política de uso.',
+        rules: 'Reglas internas.',
+      });
+      expect(result).not.toHaveProperty('status');
+      expect(result).not.toHaveProperty('id');
+    });
+
+    it('oculta una sede suspendida con 404', async () => {
+      prisma.establishment.findUnique.mockResolvedValue({
+        name: ESTABLISHMENT.name,
+        slug: ESTABLISHMENT.slug,
+        timezone: ESTABLISHMENT.timezone,
+        currency: ESTABLISHMENT.currency,
+        address: null,
+        contactPhone: null,
+        contactEmail: null,
+        cancellationPolicy: null,
+        usagePolicy: null,
+        rules: null,
+        status: EstablishmentStatus.suspended,
+      });
+
+      await expectAppError(
+        service.getPublicBySlug(ESTABLISHMENT.slug),
+        404,
+        'ESTABLISHMENT_NOT_FOUND',
+      );
+    });
+
+    it('responde 404 si el slug no existe', async () => {
+      prisma.establishment.findUnique.mockResolvedValue(null);
+
+      await expectAppError(
+        service.getPublicBySlug('no-existe'),
+        404,
+        'ESTABLISHMENT_NOT_FOUND',
+      );
     });
   });
 

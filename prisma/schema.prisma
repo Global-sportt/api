@@ -281,14 +281,20 @@ model SecurityGroupPermission {
 }
 
 model Establishment {
-  id        String              @id @default(uuid()) @db.Uuid
-  name      String
-  slug      String              @unique
-  timezone  String              @default("America/Bogota")
-  currency  String              @default("COP")
-  status    EstablishmentStatus @default(pending)
-  createdAt DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                 String              @id @default(uuid()) @db.Uuid
+  name               String
+  slug               String              @unique
+  timezone           String              @default("America/Bogota")
+  currency           String              @default("COP")
+  address            String?
+  contactPhone       String?             @map("contact_phone")
+  contactEmail       String?             @map("contact_email")
+  cancellationPolicy String?             @map("cancellation_policy")
+  usagePolicy        String?             @map("usage_policy")
+  rules              String?
+  status             EstablishmentStatus @default(pending)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   securityGroups SecurityGroup[]
   memberships    Membership[]

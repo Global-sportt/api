@@ -70,6 +70,17 @@ describe('Authorization route registry (e2e)', () => {
       'authorize',
       'space:update',
     );
+    expectRoute(
+      byRoute,
+      'PATCH /establishments/:id',
+      'authorize',
+      'establishment:update',
+    );
+    expectRoute(
+      byRoute,
+      'GET /public/establishments/:slug',
+      'public',
+    );
     expectRoute(byRoute, 'GET /health/ready', 'public');
   });
 });
