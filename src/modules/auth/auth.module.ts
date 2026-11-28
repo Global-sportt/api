@@ -45,6 +45,6 @@ import { VerificationTokenService } from './services/verification-token.service'
     TokenService,
     VerificationTokenService,
   ],
-  exports: [TokenService, SessionService, AuthService],
+  exports: [TokenService, SessionService, AuthService, MailerService],
 })
 export class AuthModule {}

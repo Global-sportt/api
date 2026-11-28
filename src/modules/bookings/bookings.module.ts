@@ -4,7 +4,9 @@ import { AuthorizationGuard } from '../../common/authz/authorization.guard';
 import { AuthzModule } from '../../common/authz/authz.module';
 import { PermissionResolver } from '../../common/authz/permission-resolver.service';
 import { TenantGuard } from '../../common/guards/tenant.guard';
+import { AuthModule } from '../auth/auth.module';
 import { SpacesModule } from '../spaces/spaces.module';
+import { BookingNotificationsService } from './booking-notifications.service';
 import { BookingsExpiryService } from './bookings-expiry.service';
 import {
   BookingsController,
@@ -16,7 +18,7 @@ import { DayCloseController } from './day-close.controller';
 import { DayCloseService } from './day-close.service';
 
 @Module({
-  imports: [AuthzModule, SpacesModule],
+  imports: [AuthzModule, SpacesModule, AuthModule],
   controllers: [
     BookingsController,
     MyBookingsController,
@@ -25,6 +27,7 @@ import { DayCloseService } from './day-close.service';
   ],
   providers: [
     BookingsService,
+    BookingNotificationsService,
     BookingsExpiryService,
     DayCloseService,
     TenantGuard,
