@@ -229,3 +229,78 @@ describe('Invariantes SQL de autorización (F-10)', () => {
     }, /would invalidate|42501/);
   });
 });
+
+describe('Grilla semanal con varias franjas (operating_hours)', () => {
+  it('reemplaza el índex único por día por uno por día y apertura, más el índice de lectura', async () => {
+    const rows = await prisma.$queryRawUnsafe<
+      Array<{ indexname: string; indexdef: string }>
+    >(
+      `SELECT indexname, indexdef
+         FROM pg_indexes
+        WHERE schemaname = 'public' AND tablename = 'operating_hours'`,
+    );
+    const indexes = new Map(rows.map((row) => [row.indexname, row.indexdef]));
+
+    expect(indexes.has('operating_hours_space_id_day_of_week_key')).toBe(false);
+
+    const unique = indexes.get(
+      'operating_hours_space_id_day_of_week_opens_at_minutes_key',
+    );
+    expect(unique).toBeDefined();
+    expect(unique).toContain('UNIQUE INDEX');
+    expect(unique).toContain('(space_id, day_of_week, opens_at_minutes)');
+
+    const lookup = indexes.get('operating_hours_space_id_day_of_week_idx');
+    expect(lookup).toBeDefined();
+    expect(lookup).toContain('(space_id, day_of_week)');
+  });
+
+  it('permite dos franjas del mismo día y rechaza una apertura duplicada', async () => {
+    const establishmentId = randomUUID();
+    const spaceId = randomUUID();
+    const slug = `tmp-oh-${randomUUID()}`;
+
+    const insertFixture = async (tx: Prisma.TransactionClient) => {
+      await tx.$executeRawUnsafe(
+        `INSERT INTO establishments (id, name, slug, updated_at)
+         VALUES ($1::uuid, 'Temporal grilla', $2, now())`,
+        establishmentId,
+        slug,
+      );
+      await tx.$executeRawUnsafe(
+        `INSERT INTO spaces
+           (id, establishment_id, name, slug, status, slot_minutes, buffer_minutes, created_at, updated_at)
+         VALUES ($1::uuid, $2::uuid, 'Cancha temporal', $3, 'active', 60, 0, now(), now())`,
+        spaceId,
+        establishmentId,
+        `cancha-${slug}`,
+      );
+    };
+
+    await runAndRollback(async (tx) => {
+      await insertFixture(tx);
+      await tx.$executeRawUnsafe(
+        `INSERT INTO operating_hours
+           (id, space_id, day_of_week, opens_at_minutes, closes_at_minutes)
+         VALUES ($1::uuid, $2::uuid, 1, 540, 660), ($3::uuid, $2::uuid, 1, 840, 960)`,
+        randomUUID(),
+        spaceId,
+        randomUUID(),
+      );
+      const count = await tx.operatingHour.count({ where: { spaceId } });
+      expect(count).toBe(2);
+    });
+
+    await expectSqlFailure(async (tx) => {
+      await insertFixture(tx);
+      await tx.$executeRawUnsafe(
+        `INSERT INTO operating_hours
+           (id, space_id, day_of_week, opens_at_minutes, closes_at_minutes)
+         VALUES ($1::uuid, $2::uuid, 1, 540, 660), ($3::uuid, $2::uuid, 1, 540, 780)`,
+        randomUUID(),
+        spaceId,
+        randomUUID(),
+      );
+    }, /operating_hours_space_id_day_of_week_opens_at_minutes_key|23505/);
+  });
+});

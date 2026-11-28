@@ -392,7 +392,10 @@ model OperatingHour {
 
   space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
 
-  @@unique([spaceId, dayOfWeek])
+  // Varias franjas por día. La apertura distingue las franjas de un mismo día
+  // y el índice compuesto sirve las lecturas por día de la grilla.
+  @@unique([spaceId, dayOfWeek, opensAtMinutes])
+  @@index([spaceId, dayOfWeek])
   @@map("operating_hours")
 }
 
