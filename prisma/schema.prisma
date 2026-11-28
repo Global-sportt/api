@@ -95,6 +95,8 @@ model User {
   globalGroups       UserGlobalGroup[]
   bookingsAsPlayer   Booking[]           @relation("BookingPlayer")
   bookingsCreated    Booking[]           @relation("BookingCreatedBy")
+  dayClosesClosed    DayClose[]          @relation("DayCloseClosedBy")
+  dayClosesReopened  DayClose[]          @relation("DayCloseReopenedBy")
 
   @@index([status])
   @@map("users")
@@ -292,6 +294,7 @@ model Establishment {
   memberships    Membership[]
   spaces         Space[]
   bookings       Booking[]
+  dayCloses      DayClose[]
 
   @@map("establishments")
 }
@@ -451,4 +454,53 @@ model Booking {
   @@index([establishmentId, startsAt])
   @@index([status, expiresAt])
   @@map("bookings")
+}
+
+/// Foto congelada del cierre diario de una sede. La unicidad
+/// (establishment_id, date) impide dos cierres del mismo día local; un cierre
+/// reabierto conserva el registro y se actualiza al volver a cerrar.
+model DayClose {
+  id               String    @id @default(uuid()) @db.Uuid
+  establishmentId  String    @map("establishment_id") @db.Uuid
+  date             DateTime  @db.Date
+  closedAt         DateTime  @map("closed_at") @db.Timestamptz(6)
+  closedByUserId   String    @map("closed_by_user_id") @db.Uuid
+  reopenedAt       DateTime? @map("reopened_at") @db.Timestamptz(6)
+  reopenedByUserId String?   @map("reopened_by_user_id") @db.Uuid
+  bookingsCount    Int       @map("bookings_count")
+  noShowCount      Int       @map("no_show_count")
+  cancelledCount   Int       @map("cancelled_count")
+  totalMinor       BigInt    @map("total_minor")
+  currency         String
+
+  establishment Establishment        @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
+  // El actor del cierre y de la reapertura son evidencia de auditoría: no se
+  // borran en cascada con el usuario.
+  closedBy      User                 @relation("DayCloseClosedBy", fields: [closedByUserId], references: [id], onDelete: Restrict)
+  reopenedBy    User?                @relation("DayCloseReopenedBy", fields: [reopenedByUserId], references: [id], onDelete: SetNull)
+  spaceTotals   DayCloseSpaceTotal[]
+
+  @@unique([establishmentId, date])
+  @@map("day_closes")
+}
+
+/// Totales congelados por espacio dentro de un cierre diario. Se eliminan y
+/// recrean al re-cerrar un día reabierto.
+///
+/// `space_id` no lleva FK a `spaces` a propósito: la foto es inmutable y debe
+/// sobrevivir al borrado del espacio. Una FK con RESTRICT impediría borrar la
+/// sede (la cascada de `spaces` choca con las filas históricas) y con CASCADE
+/// borraría totales contables.
+model DayCloseSpaceTotal {
+  id            String @id @default(uuid()) @db.Uuid
+  dayCloseId    String @map("day_close_id") @db.Uuid
+  spaceId       String @map("space_id") @db.Uuid
+  bookingsCount Int    @map("bookings_count")
+  noShowCount   Int    @map("no_show_count")
+  totalMinor    BigInt @map("total_minor")
+
+  dayClose DayClose @relation(fields: [dayCloseId], references: [id], onDelete: Cascade)
+
+  @@unique([dayCloseId, spaceId])
+  @@map("day_close_space_totals")
 }

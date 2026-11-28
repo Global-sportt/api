@@ -1,6 +1,11 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { GroupScope, MembershipStatus } from '@prisma/client';
+import {
+  EstablishmentStatus,
+  GroupScope,
+  MembershipStatus,
+  SpaceStatus,
+} from '@prisma/client';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
@@ -11,6 +16,7 @@ import {
   PLAN_KIND,
   type AuthorizationService,
 } from '../src/common/authz/authorization.types';
+import { wallClockToUtc } from '../src/common/time/zoned-time';
 import { PrismaService } from '../src/prisma/prisma.service';
 
 jest.setTimeout(60_000);
@@ -60,6 +66,21 @@ interface MembershipBody {
   userId: string;
   status: string;
   groups: Array<{ slug: string; name: string }>;
+}
+
+interface AvailabilitySlotBody {
+  startsAt: string;
+  endsAt: string;
+  priceMinor: string;
+  currency: string;
+  available: boolean;
+}
+
+interface AvailabilityBody {
+  date: string;
+  timezone: string;
+  currency: string;
+  spaces: Array<{ id: string; slots: AvailabilitySlotBody[] }>;
 }
 
 let app: INestApplication;
@@ -908,5 +929,348 @@ describe('Establishments y membresías (e2e)', () => {
     const rejected = first.status === 409 ? first : second;
     expect(rejected.body.code).toBe('INVALID_STATE');
     expect(await countActiveOwners(e1.id)).toBe(1);
+  });
+
+  describe('Ciclo de vida del establecimiento (e2e)', () => {
+    const TIMEZONE = 'America/Bogota';
+    const lifecycleIpBase = ipCounter;
+
+    let lifecycleOwner: TestUser;
+    let lifecycleStaff: TestUser;
+    let lifecyclePlayer: TestUser;
+    let lifecycle: EstablishmentBody;
+    let spaceId: string;
+    let bookingDay: string;
+    let baselineBookingId: string;
+
+    function lifecyclePath(establishmentId: string = lifecycle.id): string {
+      return `/api/v1/admin/establishments/${establishmentId}/status`;
+    }
+
+    function changeStatus(
+      token: string,
+      status: string,
+      establishmentId: string = lifecycle.id,
+    ): request.Test {
+      return bearer(
+        request(server()).patch(lifecyclePath(establishmentId)).send({ status }),
+        token,
+      );
+    }
+
+    function slotAt(date: string, hour: number): { startsAt: string; endsAt: string } {
+      return {
+        startsAt: wallClockToUtc(date, hour * 60, TIMEZONE).instant.toISOString(),
+        endsAt: wallClockToUtc(date, (hour + 1) * 60, TIMEZONE).instant.toISOString(),
+      };
+    }
+
+    function createOwnBooking(
+      token: string,
+      targetSpaceId: string,
+      slot: { startsAt: string; endsAt: string },
+    ): request.Test {
+      return bearer(
+        request(server())
+          .post('/api/v1/bookings')
+          .send({ spaceId: targetSpaceId, ...slot }),
+        token,
+      );
+    }
+
+    async function publicAvailability(
+      slug: string,
+      date: string,
+    ): Promise<AvailabilityBody> {
+      const response = await request(server())
+        .get(`/api/v1/public/establishments/${slug}/availability`)
+        .set('Origin', ORIGIN)
+        .query({ date })
+        .expect(200);
+
+      return response.body as AvailabilityBody;
+    }
+
+    function statusChangedAudits(
+      info: jest.SpyInstance,
+    ): Array<[Record<string, unknown>, string]> {
+      return info.mock.calls.filter(
+        ([payload]) =>
+          (payload as { event?: string }).event === 'establishment.status_changed',
+      ) as Array<[Record<string, unknown>, string]>;
+    }
+
+    beforeAll(async () => {
+      lifecycleOwner = await registerUser('lifecycle-owner');
+      lifecycleStaff = await registerUser('lifecycle-staff');
+      lifecyclePlayer = await registerUser('lifecycle-player');
+
+      const created = await bearer(
+        request(server())
+          .post('/api/v1/admin/establishments')
+          .send({
+            name: 'E2E Ciclo de Vida',
+            slug: `e2e-ciclo-vida-${Date.now()}-${lifecycleIpBase}`,
+            timezone: TIMEZONE,
+            currency: 'COP',
+            ownerUserId: lifecycleOwner.userId,
+          }),
+        admin.token,
+      ).expect(201);
+      lifecycle = created.body as EstablishmentBody;
+
+      await bearer(
+        request(server())
+          .post(`/api/v1/establishments/${lifecycle.id}/memberships`)
+          .send({ userId: lifecycleStaff.userId, groupSlug: 'staff' }),
+        lifecycleOwner.token,
+      ).expect(201);
+
+      const space = await prisma.space.create({
+        data: {
+          establishmentId: lifecycle.id,
+          name: 'Cancha Ciclo de Vida',
+          slug: `ciclo-vida-${Date.now()}`,
+          sport: 'futbol',
+          slotMinutes: 60,
+          bufferMinutes: 0,
+          status: SpaceStatus.active,
+          operatingHours: {
+            create: Array.from({ length: 7 }, (_, dayOfWeek) => ({
+              dayOfWeek,
+              opensAtMinutes: 8 * 60,
+              closesAtMinutes: 20 * 60,
+            })),
+          },
+          priceRules: {
+            create: [
+              {
+                dayOfWeek: null,
+                startsAtMinutes: 0,
+                endsAtMinutes: 1440,
+                amountMinor: 25_000n,
+                currency: 'COP',
+                priority: 0,
+              },
+            ],
+          },
+        },
+        select: { id: true },
+      });
+      spaceId = space.id;
+
+      bookingDay = new Intl.DateTimeFormat('en-CA', {
+        timeZone: TIMEZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date(Date.now() + 86_400_000));
+
+      const baseline = await createOwnBooking(
+        lifecyclePlayer.token,
+        spaceId,
+        slotAt(bookingDay, 10),
+      ).expect(201);
+      baselineBookingId = baseline.body.id as string;
+    });
+
+    it('solo platform-admin puede cambiar el estado: owner, staff y player reciben 403', async () => {
+      const anonymous = await request(server())
+        .patch(lifecyclePath())
+        .set('Origin', ORIGIN)
+        .send({ status: 'suspended' })
+        .expect(401);
+      expect(anonymous.body.code).toBe('UNAUTHENTICATED');
+
+      for (const user of [lifecycleOwner, lifecycleStaff, lifecyclePlayer]) {
+        const denied = await changeStatus(user.token, 'suspended').expect(403);
+        expect(denied.body.code).toBe('PERMISSION_DENIED');
+      }
+
+      const stored = await prisma.establishment.findUniqueOrThrow({
+        where: { id: lifecycle.id },
+      });
+      expect(stored.status).toBe(EstablishmentStatus.active);
+    });
+
+    it('suspende, audita actor/from/to y la repetición es idempotente sin escritura', async () => {
+      const info = jest.spyOn(app.get(AppLogger).raw, 'info');
+      info.mockClear();
+
+      const suspended = await changeStatus(admin.token, 'suspended').expect(200);
+      expect(suspended.body).toMatchObject({
+        id: lifecycle.id,
+        status: EstablishmentStatus.suspended,
+      });
+
+      const audits = statusChangedAudits(info);
+      expect(audits).toHaveLength(1);
+      expect(audits[0][1]).toBe('establishment.status_changed');
+      expect(audits[0][0]).toMatchObject({
+        actorId: admin.userId,
+        establishmentId: lifecycle.id,
+        from: EstablishmentStatus.active,
+        to: EstablishmentStatus.suspended,
+        decision: 'allow',
+      });
+
+      info.mockClear();
+      const repeated = await changeStatus(admin.token, 'suspended').expect(200);
+      expect(repeated.body.status).toBe(EstablishmentStatus.suspended);
+      expect(statusChangedAudits(info)).toHaveLength(0);
+
+      // Suspension changes only the establishment state: the space, its
+      // schedule and the existing booking are untouched.
+      const space = await prisma.space.findUniqueOrThrow({ where: { id: spaceId } });
+      expect(space.status).toBe(SpaceStatus.active);
+      expect(await prisma.operatingHour.count({ where: { spaceId } })).toBe(7);
+      expect(
+        await prisma.booking.count({ where: { establishmentId: lifecycle.id } }),
+      ).toBe(1);
+
+      info.mockRestore();
+    });
+
+    it('con la sede suspendida bloquea reservas nuevas y conserva el histórico consultable', async () => {
+      const blocked = await createOwnBooking(
+        lifecyclePlayer.token,
+        spaceId,
+        slotAt(bookingDay, 11),
+      ).expect(404);
+      expect(blocked.body.code).toBe('ESTABLISHMENT_NOT_FOUND');
+
+      const publicResponse = await request(server())
+        .get(`/api/v1/public/establishments/${lifecycle.slug}/availability`)
+        .set('Origin', ORIGIN)
+        .query({ date: bookingDay })
+        .expect(404);
+      expect(publicResponse.body.code).toBe('ESTABLISHMENT_NOT_FOUND');
+
+      // The existing booking is still readable by its player...
+      const detail = await bearer(
+        request(server()).get(`/api/v1/me/bookings/${baselineBookingId}`),
+        lifecyclePlayer.token,
+      ).expect(200);
+      expect(detail.body).toMatchObject({
+        id: baselineBookingId,
+        establishmentId: lifecycle.id,
+        status: 'confirmed',
+      });
+
+      // ...and the existing space is still listed for the owner.
+      const spaces = await bearer(
+        request(server()).get(`/api/v1/establishments/${lifecycle.id}/spaces`),
+        lifecycleOwner.token,
+      ).expect(200);
+      expect(spaces.body).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: spaceId,
+            status: SpaceStatus.active,
+          }),
+        ]),
+      );
+
+      const status = await bearer(
+        request(server()).get(`/api/v1/establishments/${lifecycle.id}`),
+        lifecycleOwner.token,
+      ).expect(200);
+      expect(status.body.status).toBe(EstablishmentStatus.suspended);
+
+      expect(
+        await prisma.booking.count({ where: { establishmentId: lifecycle.id } }),
+      ).toBe(1);
+    });
+
+    it('al reactivar, la disponibilidad y la creación de reservas vuelven a funcionar', async () => {
+      const info = jest.spyOn(app.get(AppLogger).raw, 'info');
+      info.mockClear();
+
+      const reactivated = await changeStatus(admin.token, 'active').expect(200);
+      expect(reactivated.body.status).toBe(EstablishmentStatus.active);
+
+      const audits = statusChangedAudits(info);
+      expect(audits).toHaveLength(1);
+      expect(audits[0][0]).toMatchObject({
+        actorId: admin.userId,
+        establishmentId: lifecycle.id,
+        from: EstablishmentStatus.suspended,
+        to: EstablishmentStatus.active,
+      });
+
+      info.mockClear();
+      const repeated = await changeStatus(admin.token, 'active').expect(200);
+      expect(repeated.body.status).toBe(EstablishmentStatus.active);
+      expect(statusChangedAudits(info)).toHaveLength(0);
+      info.mockRestore();
+
+      const availability = await publicAvailability(lifecycle.slug, bookingDay);
+      const slots = availability.spaces.find((space) => space.id === spaceId)?.slots ?? [];
+      expect(slots.some((slot) => slot.startsAt === slotAt(bookingDay, 10).startsAt)).toBe(false);
+      expect(slots.some((slot) => slot.startsAt === slotAt(bookingDay, 12).startsAt)).toBe(true);
+
+      const created = await createOwnBooking(
+        lifecyclePlayer.token,
+        spaceId,
+        slotAt(bookingDay, 12),
+      ).expect(201);
+      expect(created.body).toMatchObject({
+        establishmentId: lifecycle.id,
+        spaceId,
+        status: 'confirmed',
+      });
+
+      expect(
+        await prisma.booking.count({ where: { establishmentId: lifecycle.id } }),
+      ).toBe(2);
+    });
+
+    it('una sede en pending no admite transiciones: 409 INVALID_STATE', async () => {
+      await prisma.establishment.update({
+        where: { id: lifecycle.id },
+        data: { status: EstablishmentStatus.pending },
+      });
+
+      for (const target of [EstablishmentStatus.suspended, EstablishmentStatus.active]) {
+        const rejected = await changeStatus(admin.token, target).expect(409);
+        expect(rejected.body.code).toBe('INVALID_STATE');
+      }
+
+      const stored = await prisma.establishment.findUniqueOrThrow({
+        where: { id: lifecycle.id },
+      });
+      expect(stored.status).toBe(EstablishmentStatus.pending);
+
+      await prisma.establishment.update({
+        where: { id: lifecycle.id },
+        data: { status: EstablishmentStatus.active },
+      });
+    });
+
+    it('rechaza bodies inválidos con 400 VALIDATION_ERROR', async () => {
+      const invalidBodies: Array<Record<string, unknown>> = [
+        {},
+        { status: 'pending' },
+        { status: 'ACTIVE' },
+        { status: 'suspended', name: 'no permitido' },
+      ];
+
+      for (const body of invalidBodies) {
+        const rejected = await bearer(
+          request(server()).patch(lifecyclePath()).send(body),
+          admin.token,
+        ).expect(400);
+        expect(rejected.body.code).toBe('VALIDATION_ERROR');
+      }
+    });
+
+    it('responde 404 ESTABLISHMENT_NOT_FOUND si la sede no existe', async () => {
+      const response = await changeStatus(
+        admin.token,
+        'suspended',
+        MISSING_ESTABLISHMENT,
+      ).expect(404);
+      expect(response.body.code).toBe('ESTABLISHMENT_NOT_FOUND');
+    });
   });
 });
